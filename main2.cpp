@@ -3557,12 +3557,12 @@ struct Chunk {
             std::vector<float>& verts = verticesPerType[type];
             int neighbor;
             if (type==5) {
-                neighbor=getBlockAtForMesh(ox-1,oy,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(leftFace,0,verts);
-                neighbor=getBlockAtForMesh(ox+1,oy,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(rightFace,1,verts);
-                neighbor=getBlockAtForMesh(ox,oy,oz+1); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(frontFace,4,verts);
-                neighbor=getBlockAtForMesh(ox,oy,oz-1); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(backFace,5,verts);
-                neighbor=getBlockAtForMesh(ox,oy+1,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(topFace,3,verts);
-                neighbor=getBlockAtForMesh(ox,oy-1,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(bottomFace,2,verts);
+                neighbor=getBlockAtForMesh(ox-1,oy,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(leftFace,0,verts);
+                neighbor=getBlockAtForMesh(ox+1,oy,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(rightFace,1,verts);
+                neighbor=getBlockAtForMesh(ox,oy,oz+1); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(frontFace,4,verts);
+                neighbor=getBlockAtForMesh(ox,oy,oz-1); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(backFace,5,verts);
+                neighbor=getBlockAtForMesh(ox,oy+1,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(topFace,3,verts);
+                neighbor=getBlockAtForMesh(ox,oy-1,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(bottomFace,2,verts);
             }
             else {
                 neighbor=getBlockAtForMesh(ox-1,oy,oz); if(neighbor==0||neighbor==5) addFace(leftFace,0,verts);

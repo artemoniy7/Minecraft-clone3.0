@@ -1,0 +1,90 @@
+{
+    "blocks": [
+      {
+        "id": 2,
+        "name": "dirt",
+        "texture_strip": "textures/blocks/dirt_strip.png",
+        "transparent": false,
+        "texture_parts": 3
+      },
+      {
+        "id": 5,
+        "name": "water",
+        "texture_strip": "textures/blocks/water.png",
+        "transparent": true
+      },
+      {
+        "id":3,
+        "name": "stone",
+        "texture_strip": "textures/blocks/stone_strip.png",
+        "transparent": false,
+        "sounds":{
+          "step": "Stone_step*.ogg"
+        },
+        "texture_parts": 3
+      },
+      {
+        "id": 1,
+        "name": "grass",
+        "texture_strip":"textures/blocks/grass_strip.png",
+        "transparent": false,
+        "sounds": {
+          "step": "Grass_step*.ogg"
+        },
+        "texture_parts": 3
+      },
+      {
+        "id":4,
+        "name": "sand",
+        "texture_strip":"textures/blocks/sand_strip.png",
+        "transparent": false,
+        "sounds":{
+          "step": "Sand_step*.ogg"
+        },
+        "texture_parts": 3
+      },
+      {
+        "id": 6,
+        "name": "oak_log",
+        "texture_strip":"textures/blocks/oak_log_strip.png",
+        "transparent": false,
+        "texture_parts": 3
+      },
+      {
+        "id": 7,
+        "name": "oak_leaves",
+        "texture_strip": "textures/blocks/oak_leaves_strip.png",
+        "transparent": true,
+        "texture_parts": 3
+      },
+      {
+        "id": 8,
+        "name": "glowstone",
+        "texture_strip": "textures/blocks/glowstone_strip.png",
+        "transparent": false,
+        "texture_parts": 3,
+        "light": 12
+      },
+      {
+        "id": 9,
+        "name": "cobblestone",
+        "texture_strip": "textures/blocks/cobblestone_strip.png",
+        "transparent": false,
+        "texture_parts": 3
+      },
+      {
+        "id": 10,
+        "name": "oak_planks",
+        "texture_strip": "textures/blocks/oak_planks_strip.png",
+        "transparent": false,
+        "texture_parts": 3
+      },
+      {
+        "id": 11,
+        "name": "spruce_planks",
+        "texture_strip": "textures/blocks/spruce_planks.png",
+        "transparent": false,
+        "texture_parts": 3
+      }
+    ]
+  }

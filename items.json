@@ -1,0 +1,15 @@
+{
+    "items": [
+      {"id": 1, "name": "minecraft:grass_block", "displayName": "Grass Block", "maxStack": 64, "texture": "None"},
+      {"id": 2, "name": "minecraft:dirt", "displayName": "Dirt", "maxStack": 64, "texture": "None"},
+      {"id": 3, "name": "minecraft:stone", "displayName": "Stone", "maxStack": 64, "texture": "None"},
+      {"id": 4, "name": "minecraft:sand", "displayName": "Sand", "maxStack": 64, "texture": "None"},
+      {"id": 5, "name": "minecraft:water", "displayName": "Water", "maxStack": 1, "texture": "None"},
+      {"id": 6, "name": "minecraft:oak_log", "displayName": "Oak Log", "maxStack": 64, "texture": "None"},
+      {"id": 7, "name": "minecraft:oak_leaves", "displayName": "Oak Leaves", "maxStack": 64, "texture": "None"},
+      {"id": 8, "name": "minecraft:glowstone", "displayName": "Glowstone", "maxStack": 64, "texture": "None"},
+      {"id": 9, "name": "minecraft:cobblestone", "displayName": "Cobblestone", "maxStack": 64, "texture": "None"},
+      {"id": 10, "name": "minecraft:oak_planks", "displayName": "Oak Planks", "maxStack": 64, "texture": "None"},
+      {"id": 11, "name": "minecraft:spruce_planks", "displayName": "Spruce Planks", "maxStack": 64, "texture": "None"}
+    ]
+  }

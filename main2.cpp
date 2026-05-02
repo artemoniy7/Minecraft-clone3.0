@@ -2657,7 +2657,7 @@ void renderInventory(int screenW, int screenH) {
     const glm::mat4 blockPreviewModel = glm::scale(
         glm::rotate(glm::rotate(glm::mat4(1.0f), glm::radians(30.0f), glm::vec3(1.0f, 0.0f, 0.0f)),
                     glm::radians(225.0f), glm::vec3(0.0f, 1.0f, 0.0f)),
-        glm::vec3(0.87f));
+        glm::vec3(1.0f));
     
     // Собираем все предметы для списка
     std::vector<int> allItemIds;
@@ -2793,7 +2793,7 @@ void renderInventory(int screenW, int screenH) {
     }
     
     // === Рисуем хотбар в инвентаре (последние 9 слотов) ===
-    const int hbStartX = posX + static_cast<int>(8.0f * scaleX);
+    const int hbStartX = posX + static_cast<int>(6.0f * scaleX);
     const int hbStartY = posY + static_cast<int>(111.0f * scaleY);
     
     for (int i = 0; i < 9; ++i) {
@@ -2801,7 +2801,7 @@ void renderInventory(int screenW, int screenH) {
         if (playerInventoryItems[invIdx].blockType == 0) continue;
         
         const int itemId = playerInventoryItems[invIdx].blockType;
-        const int x = hbStartX + i * slotW + 4;
+        const int x = hbStartX + i * slotW + 8;
         const int y = hbStartY;
         const int itemPadding = std::max(1, std::min(slotW, slotH) / 8);
         const int itemSize = std::max(8, std::min(slotW, slotH) - itemPadding * 2);
@@ -2847,8 +2847,8 @@ void renderInventory(int screenW, int screenH) {
             drawMinecraftText(
                 countStr,
                 x + slotW - measureMinecraftTextWidth(countStr, 1.5f) - 2,
-                y + slotH - 12,
-                1.5f, screenW, screenH,
+                y + slotH - 24,
+                2.1f, screenW, screenH,
                 glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
         }
     }

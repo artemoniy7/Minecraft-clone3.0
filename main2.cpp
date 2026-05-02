@@ -2683,7 +2683,7 @@ void renderInventory(int screenW, int screenH) {
             
             const int itemId = allItemIds[idx];
             const int itemSpacingX = 1; // Отступ между предметами по X
-            const int itemSpacingY = 3; // Отступ между предметами по Y
+            const int itemSpacingY = 1; // Отступ между предметами по Y
             const int x = listStartX + col * (slotW + itemSpacingX);
             const int y = listStartY + row * (slotH + itemSpacingY);
             const int itemPadding = std::max(1, std::min(slotW, slotH) / 8);
@@ -2846,7 +2846,7 @@ void renderInventory(int screenW, int screenH) {
             std::string countStr = std::to_string(playerInventoryItems[invIdx].count);
             drawMinecraftText(
                 countStr,
-                x + slotW - measureMinecraftTextWidth(countStr, 1.5f) - 2,
+                x + slotW - measureMinecraftTextWidth(countStr, 1.5f) - 8,
                 y + slotH - 24,
                 2.1f, screenW, screenH,
                 glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
@@ -3077,6 +3077,30 @@ void drawHUD(int screenW, int screenH, float currentTime)
                 1.5f, screenW, screenH,
                 glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
         }
+    }
+    // Отрисовка количества для блоков (которые уже нарисованы в 3D)
+    for (int i = 0; i < HOTBAR_SLOTS; i++)
+    {
+        const int invIdx = 27 + i;
+        if (playerInventoryItems[invIdx].blockType == 0) continue;
+        if (playerInventoryItems[invIdx].count <= 1) continue; // Показываем только если >1
+        
+        const int itemId = playerInventoryItems[invIdx].blockType;
+        const auto itemIt = itemTypes.find(itemId);
+        const bool isBlockItem = (itemIt == itemTypes.end()) || itemIt->second.isBlock;
+        
+        if (!isBlockItem) continue; // Только для блоков
+        
+        const int slotX = startX + i * (SLOT_SIZE + SLOT_SPACING);
+        const int slotY = startY;
+        
+        std::string countStr = std::to_string(playerInventoryItems[invIdx].count);
+        drawMinecraftText(
+            countStr,
+            slotX + SLOT_SIZE - measureMinecraftTextWidth(countStr, 1.5f) - 6,
+            slotY + SLOT_SIZE - 12,
+            1.5f, screenW, screenH,
+            glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
 
     // =========================================================

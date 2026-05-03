@@ -5356,7 +5356,17 @@ void renderGame(int screenW, int screenH, float currentTime) {
 
     glm::mat4 model(1.0f);
     updateGameplayCamera();
-    glm::mat4 view = glm::lookAt(renderCameraPos, renderCameraPos + cameraFront, cameraUp);
+    glm::vec3 safeRenderCameraPos = renderCameraPos;
+    glm::vec3 safeCameraFront = cameraFront;
+    if (!std::isfinite(safeRenderCameraPos.x) || !std::isfinite(safeRenderCameraPos.y) || !std::isfinite(safeRenderCameraPos.z)) {
+        safeRenderCameraPos = cameraPos;
+    }
+    if (!std::isfinite(safeCameraFront.x) || !std::isfinite(safeCameraFront.y) || !std::isfinite(safeCameraFront.z) || glm::length(safeCameraFront) < 0.001f) {
+        safeCameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+    } else {
+        safeCameraFront = glm::normalize(safeCameraFront);
+    }
+    glm::mat4 view = glm::lookAt(safeRenderCameraPos, safeRenderCameraPos + safeCameraFront, cameraUp);
     
     // ИСПОЛЬЗУЕМ currentFOV ВМЕСТО ФИКСИРОВАННОГО ЗНАЧЕНИЯ 65.0f
     glm::mat4 proj = glm::perspective(glm::radians(currentFOV), 
@@ -5380,17 +5390,24 @@ void renderGame(int screenW, int screenH, float currentTime) {
 
     // Рендер воды (с сортировкой)
     updateWaterChunksCache();
-    if (glm::distance(renderCameraPos, lastCameraPosForWaterSort) > 0.5f) {
+    if (glm::distance(safeRenderCameraPos, lastCameraPosForWaterSort) > 0.5f) {
         std::sort(waterChunksCache.begin(), waterChunksCache.end(), [&](Chunk* a, Chunk* b) {
             glm::vec3 ca(a->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, a->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
             glm::vec3 cb(b->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, b->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
-            return glm::distance(renderCameraPos, ca) > glm::distance(renderCameraPos, cb);
+            return glm::distance(safeRenderCameraPos, ca) > glm::distance(safeRenderCameraPos, cb);
         });
-        lastCameraPosForWaterSort = renderCameraPos;
+        lastCameraPosForWaterSort = safeRenderCameraPos;
     }
     for (Chunk* ch : waterChunksCache)
         ch->renderWater();
 
+    if (cameraMode == CameraMode::ThirdPersonBack) {
+        GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+        if (cullWasEnabled) glDisable(GL_CULL_FACE);
+        glm::vec3 feetPos = gameplayRayOrigin - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
+        renderPlayerModel(feetPos, cameraFront, currentTime);
+        if (cullWasEnabled) glEnable(GL_CULL_FACE);
+    }
 
     // =========================================================
     // HUD И ИНВЕНТАРЬ

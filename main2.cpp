@@ -5443,6 +5443,10 @@ void renderGame(int screenW, int screenH, float currentTime) {
     for (Chunk* ch : waterChunksCache)
         ch->renderWater();
 
+    // После рендера воды обязательно возвращаем обычный режим шейдера:
+    // иначе UV-анимация воды (u_isWater=1) применяется и к модели игрока.
+    glUniform1i(u_isWater_location, 0);
+
     if (cameraMode == CameraMode::ThirdPersonBack) {
         GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
         if (cullWasEnabled) glDisable(GL_CULL_FACE);

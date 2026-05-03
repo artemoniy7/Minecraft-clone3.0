@@ -5297,21 +5297,40 @@ void initPlayerRenderer() {
 }
 
 void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float currentTime) {
+    (void)lookDir;
     (void)currentTime;
     if (!playerVAO) return;
+
+    auto pushFace = [](std::vector<float>& verts, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n,
+                       float u0, float v0, float u1, float v1) {
+        float face[] = {
+            a.x,a.y,a.z,u0,v0,n.x,n.y,n.z,1,0, b.x,b.y,b.z,u1,v0,n.x,n.y,n.z,1,0, c.x,c.y,c.z,u1,v1,n.x,n.y,n.z,1,0,
+            c.x,c.y,c.z,u1,v1,n.x,n.y,n.z,1,0, d.x,d.y,d.z,u0,v1,n.x,n.y,n.z,1,0, a.x,a.y,a.z,u0,v0,n.x,n.y,n.z,1,0
+        };
+        verts.insert(verts.end(), std::begin(face), std::end(face));
+    };
+
     auto drawBox=[&](glm::vec3 c, glm::vec3 sz, unsigned int tex){
         float x0=c.x-sz.x*0.5f,x1=c.x+sz.x*0.5f,y0=c.y,y1=c.y+sz.y,z0=c.z-sz.z*0.5f,z1=c.z+sz.z*0.5f;
-        float v[]={x0,y0,z1,0,0,0,0,1,1,0, x1,y0,z1,1,0,0,0,1,1,0, x1,y1,z1,1,1,0,0,1,1,0, x1,y1,z1,1,1,0,0,1,1,0, x0,y1,z1,0,1,0,0,1,1,0, x0,y0,z1,0,0,0,0,1,1,0};
+        std::vector<float> v;
+        v.reserve(36 * 10);
+        const float du = 1.0f / 6.0f; // left, front, right, back, top, bottom
+        pushFace(v,{x0,y0,z1},{x1,y0,z1},{x1,y1,z1},{x0,y1,z1},{0,0,1},1*du,0,2*du,1);
+        pushFace(v,{x1,y0,z0},{x0,y0,z0},{x0,y1,z0},{x1,y1,z0},{0,0,-1},3*du,0,4*du,1);
+        pushFace(v,{x0,y0,z0},{x0,y0,z1},{x0,y1,z1},{x0,y1,z0},{-1,0,0},0*du,0,1*du,1);
+        pushFace(v,{x1,y0,z1},{x1,y0,z0},{x1,y1,z0},{x1,y1,z1},{1,0,0},2*du,0,3*du,1);
+        pushFace(v,{x0,y1,z1},{x1,y1,z1},{x1,y1,z0},{x0,y1,z0},{0,1,0},4*du,0,5*du,1);
+        pushFace(v,{x0,y0,z0},{x1,y0,z0},{x1,y0,z1},{x0,y0,z1},{0,-1,0},5*du,0,6*du,1);
         glBindTexture(GL_TEXTURE_2D, tex);
         glBindVertexArray(playerVAO);
         glBindBuffer(GL_ARRAY_BUFFER, playerVBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(v), v, GL_DYNAMIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_DYNAMIC_DRAW);
         glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)0); glEnableVertexAttribArray(0);
         glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(3*sizeof(float))); glEnableVertexAttribArray(1);
         glVertexAttribPointer(2,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(5*sizeof(float))); glEnableVertexAttribArray(2);
         glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
         glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
-        glDrawArrays(GL_TRIANGLES,0,6);
+        glDrawArrays(GL_TRIANGLES,0,(GLsizei)(v.size()/10));
     };
     float y=feetPos.y;
     drawBox(glm::vec3(feetPos.x, y+0.6f, feetPos.z), glm::vec3(0.5f,0.72f,0.25f), playerTexBody);

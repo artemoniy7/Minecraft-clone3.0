@@ -5391,10 +5391,6 @@ void renderGame(int screenW, int screenH, float currentTime) {
     for (Chunk* ch : waterChunksCache)
         ch->renderWater();
 
-    if (cameraMode == CameraMode::ThirdPersonBack) {
-        glm::vec3 feetPos = gameplayRayOrigin - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
-        renderPlayerModel(feetPos, cameraFront, currentTime);
-    }
 
     // =========================================================
     // HUD И ИНВЕНТАРЬ

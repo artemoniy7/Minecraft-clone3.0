@@ -1492,6 +1492,9 @@ void workerFunction() {
 unsigned int shaderProgram, reticleProgram, reticleVAO;
 unsigned int cloudTexture = 0, cloudVAO = 0, cloudVBO = 0;
 int u_time_location, u_isWater_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location;
+int u_tintColor_location;
+glm::vec3 grassTintColor(1.0f, 1.0f, 1.0f);
+glm::vec3 foliageTintColor(1.0f, 1.0f, 1.0f);
 
 struct Chunk;
 std::unordered_map<glm::ivec2, Chunk, hash_ivec2> loadedChunks;
@@ -3618,6 +3621,9 @@ struct Chunk {
             if (type==5 || !vao[type]) continue;
             auto it = blockTypes.find(type); if (it==blockTypes.end()) continue;
             glUniform1i(u_isWater_location, 0);
+            if (type == 1) glUniform3f(u_tintColor_location, grassTintColor.r, grassTintColor.g, grassTintColor.b);
+            else if (type == 7) glUniform3f(u_tintColor_location, foliageTintColor.r, foliageTintColor.g, foliageTintColor.b);
+            else glUniform3f(u_tintColor_location, 1.0f, 1.0f, 1.0f);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, it->second.textureID);
             glBindVertexArray(vao[type]); glDrawArrays(GL_TRIANGLES, 0, vertexCount[type]);
         }
@@ -3626,6 +3632,7 @@ struct Chunk {
         if (!meshReady || !vao[5]) return;
         glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glDepthMask(GL_FALSE);
         glUniform1i(u_isWater_location, 1);
+        glUniform3f(u_tintColor_location, 1.0f, 1.0f, 1.0f);
         glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, blockTypes[5].textureID);
         glBindVertexArray(vao[5]); glDrawArrays(GL_TRIANGLES, 0, vertexCount[5]);
         glDepthMask(GL_TRUE); glDisable(GL_BLEND);
@@ -3906,7 +3913,34 @@ unsigned int loadTextureStrip(const char* path, bool forceAlpha) {
     stbi_image_free(data); return tex;
 }
 
-bool loadBlockConfig(const std::string& path) {
+glm::vec3 sampleMinecraftColormapColor(const char* path, float temperature, float rainfall) {
+    int w, h, channels;
+    stbi_uc* data = stbi_load(path, &w, &h, &channels, 4);
+    if (!data || w <= 0 || h <= 0) {
+        if (data) stbi_image_free(data);
+        return glm::vec3(1.0f);
+    }
+
+    temperature = std::clamp(temperature, 0.0f, 1.0f);
+    rainfall = std::clamp(rainfall, 0.0f, 1.0f);
+    rainfall *= temperature;
+
+    int x = static_cast<int>((1.0f - temperature) * static_cast<float>(w - 1));
+    int y = static_cast<int>((1.0f - rainfall) * static_cast<float>(h - 1));
+    x = std::clamp(x, 0, w - 1);
+    y = std::clamp(y, 0, h - 1);
+
+    int idx = (y * w + x) * 4;
+    glm::vec3 color(
+        static_cast<float>(data[idx]) / 255.0f,
+        static_cast<float>(data[idx + 1]) / 255.0f,
+        static_cast<float>(data[idx + 2]) / 255.0f
+    );
+    stbi_image_free(data);
+    return color;
+}
+
+    bool loadBlockConfig(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) return false;
     json data = json::parse(f);
@@ -3932,6 +3966,10 @@ bool loadBlockConfig(const std::string& path) {
             }
         }
     }
+    // Базовые климатические значения обычного региона (Plains, 1.7.10):
+    // температура 0.8, влажность 0.4.
+    grassTintColor = sampleMinecraftColormapColor("textures/colormap/grass.png", 0.8f, 0.4f);
+    foliageTintColor = sampleMinecraftColormapColor("textures/colormap/foliage.png", 0.8f, 0.4f);
     return !blockTypes.empty();
 }
 
@@ -4241,6 +4279,9 @@ void renderSingleBlockModel(int blockType) {
     
     auto it = blockTypes.find(blockType);
     if (it != blockTypes.end()) {
+        if (blockType == 1) glUniform3f(u_tintColor_location, grassTintColor.r, grassTintColor.g, grassTintColor.b);
+        else if (blockType == 7) glUniform3f(u_tintColor_location, foliageTintColor.r, foliageTintColor.g, foliageTintColor.b);
+        else glUniform3f(u_tintColor_location, 1.0f, 1.0f, 1.0f);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, it->second.textureID);
         glBindVertexArray(singleBlockVAO[blockType]);
@@ -5633,6 +5674,7 @@ const char *fragmentShaderSource = R"(
 #version 330 core
 in vec2 TexCoord; out vec4 FragColor;
 uniform sampler2D ourTexture; uniform float u_time; uniform int u_isWater;
+uniform vec3 u_tintColor;
 uniform vec3 u_sunDir; uniform float u_sunIntensity; uniform float u_ambientBase;
 in vec3 FragPos; in vec3 Normal; in float LightLevel; in float BlockLightLevel;
 void main() {
@@ -5643,6 +5685,7 @@ void main() {
         uv.y = uv.y / frames + floor(frame) / frames;
     }
     vec4 color = texture(ourTexture, uv); if (u_isWater==1) color.a = 0.7;
+    color.rgb *= u_tintColor;
     vec3 n = normalize(Normal);
     float vertexLight = clamp(LightLevel, 0.0, 1.0);
     float blockLightOnly = clamp(BlockLightLevel, 0.0, 1.0);
@@ -5729,9 +5772,11 @@ int main() {
     glUniform1i(glGetUniformLocation(shaderProgram,"ourTexture"),0);
     u_time_location = glGetUniformLocation(shaderProgram,"u_time");
     u_isWater_location = glGetUniformLocation(shaderProgram,"u_isWater");
+    u_tintColor_location = glGetUniformLocation(shaderProgram,"u_tintColor");
     u_sunDir_location = glGetUniformLocation(shaderProgram,"u_sunDir");
     u_sunIntensity_location = glGetUniformLocation(shaderProgram,"u_sunIntensity");
     u_ambientBase_location = glGetUniformLocation(shaderProgram,"u_ambientBase");
+    glUniform3f(u_tintColor_location, 1.0f, 1.0f, 1.0f);
     u_modelLoc = glGetUniformLocation(shaderProgram,"model");
     u_viewLoc = glGetUniformLocation(shaderProgram,"view");
     u_projLoc = glGetUniformLocation(shaderProgram,"projection");

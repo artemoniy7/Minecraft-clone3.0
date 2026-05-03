@@ -5325,67 +5325,109 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
     auto pushFace = [](std::vector<float>& verts, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n,
                        float u0, float v0, float u1, float v1) {
         float face[] = {
-            a.x,a.y,a.z,u0,v0,n.x,n.y,n.z,1,0, b.x,b.y,b.z,u1,v0,n.x,n.y,n.z,1,0, c.x,c.y,c.z,u1,v1,n.x,n.y,n.z,1,0,
-            c.x,c.y,c.z,u1,v1,n.x,n.y,n.z,1,0, d.x,d.y,d.z,u0,v1,n.x,n.y,n.z,1,0, a.x,a.y,a.z,u0,v0,n.x,n.y,n.z,1,0
+            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,0,   // Исправлено: v1 вместо v0
+            b.x,b.y,b.z,u1,v1,n.x,n.y,n.z,1,0,
+            c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,0,
+            c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,0,
+            d.x,d.y,d.z,u0,v0,n.x,n.y,n.z,1,0,
+            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,0
         };
         verts.insert(verts.end(), std::begin(face), std::end(face));
     };
 
     struct UVRect { float u0, v0, u1, v1; };
-    auto drawBox=[&](glm::vec3 c, glm::vec3 sz, unsigned int tex, const std::array<UVRect, 6>& uv){
-        float x0=c.x-sz.x*0.5f,x1=c.x+sz.x*0.5f,y0=c.y,y1=c.y+sz.y,z0=c.z-sz.z*0.5f,z1=c.z+sz.z*0.5f;
+    
+    auto drawBox = [&](glm::vec3 center, glm::vec3 size, unsigned int tex, const std::array<UVRect, 6>& uv) {
+        float x0 = center.x - size.x * 0.5f;
+        float x1 = center.x + size.x * 0.5f;
+        float y0 = center.y;
+        float y1 = center.y + size.y;
+        float z0 = center.z - size.z * 0.5f;
+        float z1 = center.z + size.z * 0.5f;
+        
         std::vector<float> v;
         v.reserve(36 * 10);
-        // uv order: left, front, right, back, top, bottom
-        pushFace(v,{x0,y0,z1},{x1,y0,z1},{x1,y1,z1},{x0,y1,z1},{0,0,1}, uv[1].u0,uv[1].v0,uv[1].u1,uv[1].v1);
-        pushFace(v,{x1,y0,z0},{x0,y0,z0},{x0,y1,z0},{x1,y1,z0},{0,0,-1},uv[3].u0,uv[3].v0,uv[3].u1,uv[3].v1);
-        pushFace(v,{x0,y0,z0},{x0,y0,z1},{x0,y1,z1},{x0,y1,z0},{-1,0,0},uv[0].u0,uv[0].v0,uv[0].u1,uv[0].v1);
-        pushFace(v,{x1,y0,z1},{x1,y0,z0},{x1,y1,z0},{x1,y1,z1},{1,0,0}, uv[2].u0,uv[2].v0,uv[2].u1,uv[2].v1);
-        pushFace(v,{x0,y1,z1},{x1,y1,z1},{x1,y1,z0},{x0,y1,z0},{0,1,0}, uv[4].u0,uv[4].v0,uv[4].u1,uv[4].v1);
-        pushFace(v,{x0,y0,z0},{x1,y0,z0},{x1,y0,z1},{x0,y0,z1},{0,-1,0},uv[5].u0,uv[5].v0,uv[5].u1,uv[5].v1);
+        
+        // Порядок граней: ЛЕВАЯ, ПЕРЕДНЯЯ, ПРАВАЯ, ЗАДНЯЯ, ВЕРХНЯЯ, НИЖНЯЯ
+        // Левая грань (X-)
+        pushFace(v, {x0,y0,z0}, {x0,y0,z1}, {x0,y1,z1}, {x0,y1,z0}, {-1,0,0}, uv[0].u0, uv[0].v0, uv[0].u1, uv[0].v1);
+        // Передняя грань (Z+)
+        pushFace(v, {x1,y0,z1}, {x0,y0,z1}, {x0,y1,z1}, {x1,y1,z1}, {0,0,1}, uv[1].u0, uv[1].v0, uv[1].u1, uv[1].v1);
+        // Правая грань (X+)
+        pushFace(v, {x1,y0,z1}, {x1,y0,z0}, {x1,y1,z0}, {x1,y1,z1}, {1,0,0}, uv[2].u0, uv[2].v0, uv[2].u1, uv[2].v1);
+        // Задняя грань (Z-)
+        pushFace(v, {x0,y0,z0}, {x1,y0,z0}, {x1,y1,z0}, {x0,y1,z0}, {0,0,-1}, uv[3].u0, uv[3].v0, uv[3].u1, uv[3].v1);
+        // Верхняя грань (Y+)
+        pushFace(v, {x0,y1,z1}, {x1,y1,z1}, {x1,y1,z0}, {x0,y1,z0}, {0,1,0}, uv[4].u0, uv[4].v0, uv[4].u1, uv[4].v1);
+        // Нижняя грань (Y-)
+        pushFace(v, {x1,y0,z1}, {x0,y0,z1}, {x0,y0,z0}, {x1,y0,z0}, {0,-1,0}, uv[5].u0, uv[5].v0, uv[5].u1, uv[5].v1);
+        
         glBindTexture(GL_TEXTURE_2D, tex);
         glBindVertexArray(playerVAO);
         glBindBuffer(GL_ARRAY_BUFFER, playerVBO);
         glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_DYNAMIC_DRAW);
-        glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)0); glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(3*sizeof(float))); glEnableVertexAttribArray(1);
-        glVertexAttribPointer(2,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(5*sizeof(float))); glEnableVertexAttribArray(2);
-        glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
-        glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
-        glDrawArrays(GL_TRIANGLES,0,(GLsizei)(v.size()/10));
+        
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(5 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(8 * sizeof(float)));
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(9 * sizeof(float)));
+        glEnableVertexAttribArray(4);
+        
+        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size() / 10));
     };
-    float y=feetPos.y;
+    
+    
+    // UV для головы (64x64 текстура скина)
+    // Каждая грань 8x8 пикселей в зоне 48x8
+    float y = feetPos.y;
+    // UV для головы (64x64 текстура скина) - ВЫСОТА 8 пикселей
     const std::array<UVRect, 6> headUv = {{
-        {0.0f/48.0f, 0.0f/8.0f,  8.0f/48.0f, 8.0f/8.0f},   // left
-        {8.0f/48.0f, 0.0f/8.0f, 16.0f/48.0f, 8.0f/8.0f},   // front
-        {16.0f/48.0f,0.0f/8.0f, 24.0f/48.0f, 8.0f/8.0f},   // right
-        {24.0f/48.0f,0.0f/8.0f, 32.0f/48.0f, 8.0f/8.0f},   // back
-        {32.0f/48.0f,0.0f/8.0f, 40.0f/48.0f, 8.0f/8.0f},   // top
-        {40.0f/48.0f,0.0f/8.0f, 48.0f/48.0f, 8.0f/8.0f}    // bottom
+        {0.0f/48.0f, 0.0f/8.0f,  8.0f/48.0f, 1.0f},   // левая (8/8 = 1.0)
+        {8.0f/48.0f, 0.0f/8.0f, 16.0f/48.0f, 1.0f},   // передняя
+        {16.0f/48.0f,0.0f/8.0f, 24.0f/48.0f, 1.0f},   // правая
+        {24.0f/48.0f,0.0f/8.0f, 32.0f/48.0f, 1.0f},   // задняя
+        {32.0f/48.0f,0.0f/8.0f, 40.0f/48.0f, 1.0f},   // верхняя
+        {40.0f/48.0f,0.0f/8.0f, 48.0f/48.0f, 1.0f}    // нижняя
     }};
+
+    // UV для конечностей (руки и ноги) - ТЕКСТУРА 24x12
     const std::array<UVRect, 6> limbUv = {{
-        {0.0f/24.0f,  0.0f/16.0f,  4.0f/24.0f, 12.0f/16.0f}, // left
-        {4.0f/24.0f,  0.0f/16.0f,  8.0f/24.0f, 12.0f/16.0f}, // front
-        {8.0f/24.0f,  0.0f/16.0f, 12.0f/24.0f, 12.0f/16.0f}, // right
-        {12.0f/24.0f, 0.0f/16.0f, 16.0f/24.0f, 12.0f/16.0f}, // back
-        {16.0f/24.0f,12.0f/16.0f, 20.0f/24.0f, 16.0f/16.0f}, // top
-        {20.0f/24.0f,12.0f/16.0f, 24.0f/24.0f, 16.0f/16.0f}  // bottom
+        {0.0f/24.0f, 0.0f/12.0f,  4.0f/24.0f, 1.0f},   // левая (12/12 = 1.0)
+        {4.0f/24.0f, 0.0f/12.0f,  8.0f/24.0f, 1.0f},   // передняя
+        {8.0f/24.0f, 0.0f/12.0f, 12.0f/24.0f, 1.0f},   // правая
+        {12.0f/24.0f,0.0f/12.0f, 16.0f/24.0f, 1.0f},   // задняя
+        {16.0f/24.0f,8.0f/12.0f, 20.0f/24.0f, 1.0f},   // верхняя
+        {20.0f/24.0f,8.0f/12.0f, 24.0f/24.0f, 1.0f}    // нижняя
     }};
+
+    // UV для туловища - ТЕКСТУРА 40x12
     const std::array<UVRect, 6> bodyUv = {{
-        {0.0f/40.0f,  0.0f/16.0f,  4.0f/40.0f, 12.0f/16.0f}, // left
-        {4.0f/40.0f,  0.0f/16.0f, 12.0f/40.0f, 12.0f/16.0f}, // front
-        {12.0f/40.0f, 0.0f/16.0f, 16.0f/40.0f, 12.0f/16.0f}, // right
-        {16.0f/40.0f, 0.0f/16.0f, 24.0f/40.0f, 12.0f/16.0f}, // back
-        {24.0f/40.0f,12.0f/16.0f, 32.0f/40.0f, 16.0f/16.0f}, // top
-        {32.0f/40.0f,12.0f/16.0f, 40.0f/40.0f, 16.0f/16.0f}  // bottom
+        {0.0f/40.0f, 0.0f/12.0f,  4.0f/40.0f, 1.0f},   // левая (12/12 = 1.0)
+        {4.0f/40.0f, 0.0f/12.0f, 12.0f/40.0f, 1.0f},   // передняя
+        {12.0f/40.0f,0.0f/12.0f, 16.0f/40.0f, 1.0f},   // правая
+        {16.0f/40.0f,0.0f/12.0f, 24.0f/40.0f, 1.0f},   // задняя
+        {24.0f/40.0f,8.0f/12.0f, 32.0f/40.0f, 1.0f},   // верхняя (крышка)
+        {32.0f/40.0f,8.0f/12.0f, 40.0f/40.0f, 1.0f}    // нижняя
     }};
-    // Модель высотой 1.8 блока: ноги 0.75, туловище 0.75, голова 0.5 с перекрытием 0.2 по шее.
+    
+    // Туловище: от y+0.75 до y+1.50 (центр на y+1.125)
     drawBox(glm::vec3(feetPos.x, y + 0.75f, feetPos.z), glm::vec3(0.5f, 0.75f, 0.25f), playerTexBody, bodyUv);
-    drawBox(glm::vec3(feetPos.x, y + 1.3f, feetPos.z), glm::vec3(0.5f, 0.5f, 0.5f), playerTexHead, headUv);
+    
+    // Голова: от y+1.50 до y+2.00 (центр на y+1.75, выступает над хитбоксом)
+    drawBox(glm::vec3(feetPos.x, y + 1.5f, feetPos.z), glm::vec3(0.5f, 0.5f, 0.5f), playerTexHead, headUv);
+    
+    // Руки: от y+0.75 до y+1.50 (центр на y+1.125)
     drawBox(glm::vec3(feetPos.x - 0.375f, y + 0.75f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmL, limbUv);
     drawBox(glm::vec3(feetPos.x + 0.375f, y + 0.75f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmR, limbUv);
-    drawBox(glm::vec3(feetPos.x - 0.125f, y, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegL, limbUv);
-    drawBox(glm::vec3(feetPos.x + 0.125f, y, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegR, limbUv);
+    
+    // Ноги: от y+0.00 до y+0.75 (центр на y+0.375)
+    drawBox(glm::vec3(feetPos.x - 0.125f, y + 0.0f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegL, limbUv);
+    drawBox(glm::vec3(feetPos.x + 0.125f, y + 0.0f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegR, limbUv);
 }
 
 void renderGame(int screenW, int screenH, float currentTime) {

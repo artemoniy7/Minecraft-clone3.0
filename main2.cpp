@@ -74,6 +74,7 @@ enum class CameraMode { FirstPerson, ThirdPersonBack };
 CameraMode cameraMode = CameraMode::FirstPerson;
 glm::vec3 gameplayRayOrigin = cameraPos;
 glm::vec3 gameplayRayDir = cameraFront;
+glm::vec3 renderCameraPos = cameraPos;
 float thirdPersonDistance = 3.2f;
 
 unsigned int playerTexHead = 0, playerTexBody = 0, playerTexArmL = 0, playerTexArmR = 0, playerTexLegL = 0, playerTexLegR = 0;
@@ -5276,10 +5277,11 @@ void updateGameplayCamera() {
     glm::vec3 feetPos = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     gameplayRayOrigin = cameraPos;
     gameplayRayDir = cameraFront;
+    renderCameraPos = cameraPos;
     if (cameraMode == CameraMode::ThirdPersonBack) {
         glm::vec3 back = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
         if (glm::length(back) < 0.001f) back = glm::vec3(0,0,-1);
-        cameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT + 0.2f, 0.0f) - back * thirdPersonDistance;
+        renderCameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT + 0.2f, 0.0f) - back * thirdPersonDistance;
     }
 }
 
@@ -5287,7 +5289,7 @@ void initPlayerRenderer() {
     playerTexHead = loadTextureStrip("textures/entity/player/head.png", true);
     playerTexBody = loadTextureStrip("textures/entity/player/body.png", true);
     playerTexArmL = loadTextureStrip("textures/entity/player/arm_left.png", true);
-    playerTexArmR = loadTextureStrip("textures/entity/player/arm.right.png", true);
+    playerTexArmR = loadTextureStrip("textures/entity/player/arm_right.png", true);
     playerTexLegL = loadTextureStrip("textures/entity/player/leg_left.png", true);
     playerTexLegR = loadTextureStrip("textures/entity/player/leg_right.png", true);
     glGenVertexArrays(1, &playerVAO);
@@ -5330,7 +5332,7 @@ void renderGame(int screenW, int screenH, float currentTime) {
 
     glm::mat4 model(1.0f);
     updateGameplayCamera();
-    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+    glm::mat4 view = glm::lookAt(renderCameraPos, renderCameraPos + cameraFront, cameraUp);
     
     // ИСПОЛЬЗУЕМ currentFOV ВМЕСТО ФИКСИРОВАННОГО ЗНАЧЕНИЯ 65.0f
     glm::mat4 proj = glm::perspective(glm::radians(currentFOV), 
@@ -5354,13 +5356,13 @@ void renderGame(int screenW, int screenH, float currentTime) {
 
     // Рендер воды (с сортировкой)
     updateWaterChunksCache();
-    if (glm::distance(cameraPos, lastCameraPosForWaterSort) > 0.5f) {
+    if (glm::distance(renderCameraPos, lastCameraPosForWaterSort) > 0.5f) {
         std::sort(waterChunksCache.begin(), waterChunksCache.end(), [&](Chunk* a, Chunk* b) {
             glm::vec3 ca(a->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, a->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
             glm::vec3 cb(b->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, b->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
-            return glm::distance(cameraPos, ca) > glm::distance(cameraPos, cb);
+            return glm::distance(renderCameraPos, ca) > glm::distance(renderCameraPos, cb);
         });
-        lastCameraPosForWaterSort = cameraPos;
+        lastCameraPosForWaterSort = renderCameraPos;
     }
     for (Chunk* ch : waterChunksCache)
         ch->renderWater();

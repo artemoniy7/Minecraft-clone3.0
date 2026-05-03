@@ -5279,8 +5279,13 @@ void updateGameplayCamera() {
     gameplayRayDir = cameraFront;
     renderCameraPos = cameraPos;
     if (cameraMode == CameraMode::ThirdPersonBack) {
-        glm::vec3 back = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
-        if (glm::length(back) < 0.001f) back = glm::vec3(0,0,-1);
+        glm::vec3 flatForward(cameraFront.x, 0.0f, cameraFront.z);
+        if (glm::length(flatForward) < 0.001f) {
+            flatForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        } else {
+            flatForward = glm::normalize(flatForward);
+        }
+        glm::vec3 back = flatForward;
         renderCameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT + 0.2f, 0.0f) - back * thirdPersonDistance;
     }
 }

@@ -74,6 +74,7 @@ enum class CameraMode { FirstPerson, ThirdPersonBack };
 CameraMode cameraMode = CameraMode::FirstPerson;
 glm::vec3 gameplayRayOrigin = cameraPos;
 glm::vec3 gameplayRayDir = cameraFront;
+glm::vec3 renderCameraPos = cameraPos;
 float thirdPersonDistance = 3.2f;
 
 unsigned int playerTexHead = 0, playerTexBody = 0, playerTexArmL = 0, playerTexArmR = 0, playerTexLegL = 0, playerTexLegR = 0;
@@ -5276,10 +5277,16 @@ void updateGameplayCamera() {
     glm::vec3 feetPos = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     gameplayRayOrigin = cameraPos;
     gameplayRayDir = cameraFront;
+    renderCameraPos = cameraPos;
     if (cameraMode == CameraMode::ThirdPersonBack) {
-        glm::vec3 back = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
-        if (glm::length(back) < 0.001f) back = glm::vec3(0,0,-1);
-        cameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT + 0.2f, 0.0f) - back * thirdPersonDistance;
+        glm::vec3 flatForward(cameraFront.x, 0.0f, cameraFront.z);
+        if (glm::length(flatForward) < 0.001f) {
+            flatForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        } else {
+            flatForward = glm::normalize(flatForward);
+        }
+        glm::vec3 back = flatForward;
+        renderCameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT + 0.2f, 0.0f) - back * thirdPersonDistance;
     }
 }
 
@@ -5287,37 +5294,95 @@ void initPlayerRenderer() {
     playerTexHead = loadTextureStrip("textures/entity/player/head.png", true);
     playerTexBody = loadTextureStrip("textures/entity/player/body.png", true);
     playerTexArmL = loadTextureStrip("textures/entity/player/arm_left.png", true);
-    playerTexArmR = loadTextureStrip("textures/entity/player/arm.right.png", true);
+    playerTexArmR = loadTextureStrip("textures/entity/player/arm_right.png", true);
     playerTexLegL = loadTextureStrip("textures/entity/player/leg_left.png", true);
     playerTexLegR = loadTextureStrip("textures/entity/player/leg_right.png", true);
+    auto setupPlayerTex = [](unsigned int tex) {
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    };
+    setupPlayerTex(playerTexHead);
+    setupPlayerTex(playerTexBody);
+    setupPlayerTex(playerTexArmL);
+    setupPlayerTex(playerTexArmR);
+    setupPlayerTex(playerTexLegL);
+    setupPlayerTex(playerTexLegR);
     glGenVertexArrays(1, &playerVAO);
     glGenBuffers(1, &playerVBO);
 }
 
 void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float currentTime) {
+    (void)lookDir;
     (void)currentTime;
     if (!playerVAO) return;
-    auto drawBox=[&](glm::vec3 c, glm::vec3 sz, unsigned int tex){
+
+    auto pushFace = [](std::vector<float>& verts, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n,
+                       float u0, float v0, float u1, float v1) {
+        float face[] = {
+            a.x,a.y,a.z,u0,v0,n.x,n.y,n.z,1,0, b.x,b.y,b.z,u1,v0,n.x,n.y,n.z,1,0, c.x,c.y,c.z,u1,v1,n.x,n.y,n.z,1,0,
+            c.x,c.y,c.z,u1,v1,n.x,n.y,n.z,1,0, d.x,d.y,d.z,u0,v1,n.x,n.y,n.z,1,0, a.x,a.y,a.z,u0,v0,n.x,n.y,n.z,1,0
+        };
+        verts.insert(verts.end(), std::begin(face), std::end(face));
+    };
+
+    struct UVRect { float u0, v0, u1, v1; };
+    auto drawBox=[&](glm::vec3 c, glm::vec3 sz, unsigned int tex, const std::array<UVRect, 6>& uv){
         float x0=c.x-sz.x*0.5f,x1=c.x+sz.x*0.5f,y0=c.y,y1=c.y+sz.y,z0=c.z-sz.z*0.5f,z1=c.z+sz.z*0.5f;
-        float v[]={x0,y0,z1,0,0,0,0,1,1,0, x1,y0,z1,1,0,0,0,1,1,0, x1,y1,z1,1,1,0,0,1,1,0, x1,y1,z1,1,1,0,0,1,1,0, x0,y1,z1,0,1,0,0,1,1,0, x0,y0,z1,0,0,0,0,1,1,0};
+        std::vector<float> v;
+        v.reserve(36 * 10);
+        // uv order: left, front, right, back, top, bottom
+        pushFace(v,{x0,y0,z1},{x1,y0,z1},{x1,y1,z1},{x0,y1,z1},{0,0,1}, uv[1].u0,uv[1].v0,uv[1].u1,uv[1].v1);
+        pushFace(v,{x1,y0,z0},{x0,y0,z0},{x0,y1,z0},{x1,y1,z0},{0,0,-1},uv[3].u0,uv[3].v0,uv[3].u1,uv[3].v1);
+        pushFace(v,{x0,y0,z0},{x0,y0,z1},{x0,y1,z1},{x0,y1,z0},{-1,0,0},uv[0].u0,uv[0].v0,uv[0].u1,uv[0].v1);
+        pushFace(v,{x1,y0,z1},{x1,y0,z0},{x1,y1,z0},{x1,y1,z1},{1,0,0}, uv[2].u0,uv[2].v0,uv[2].u1,uv[2].v1);
+        pushFace(v,{x0,y1,z1},{x1,y1,z1},{x1,y1,z0},{x0,y1,z0},{0,1,0}, uv[4].u0,uv[4].v0,uv[4].u1,uv[4].v1);
+        pushFace(v,{x0,y0,z0},{x1,y0,z0},{x1,y0,z1},{x0,y0,z1},{0,-1,0},uv[5].u0,uv[5].v0,uv[5].u1,uv[5].v1);
         glBindTexture(GL_TEXTURE_2D, tex);
         glBindVertexArray(playerVAO);
         glBindBuffer(GL_ARRAY_BUFFER, playerVBO);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(v), v, GL_DYNAMIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_DYNAMIC_DRAW);
         glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)0); glEnableVertexAttribArray(0);
         glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(3*sizeof(float))); glEnableVertexAttribArray(1);
         glVertexAttribPointer(2,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(5*sizeof(float))); glEnableVertexAttribArray(2);
         glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
         glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
-        glDrawArrays(GL_TRIANGLES,0,6);
+        glDrawArrays(GL_TRIANGLES,0,(GLsizei)(v.size()/10));
     };
     float y=feetPos.y;
-    drawBox(glm::vec3(feetPos.x, y+0.6f, feetPos.z), glm::vec3(0.5f,0.72f,0.25f), playerTexBody);
-    drawBox(glm::vec3(feetPos.x, y+1.32f, feetPos.z), glm::vec3(0.6f,0.48f,0.6f), playerTexHead);
-    drawBox(glm::vec3(feetPos.x-0.38f, y+0.6f, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexArmL);
-    drawBox(glm::vec3(feetPos.x+0.38f, y+0.6f, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexArmR);
-    drawBox(glm::vec3(feetPos.x-0.15f, y, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexLegL);
-    drawBox(glm::vec3(feetPos.x+0.15f, y, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexLegR);
+    const std::array<UVRect, 6> headUv = {{
+        {0.0f/48.0f, 0.0f/8.0f,  8.0f/48.0f, 8.0f/8.0f},   // left
+        {8.0f/48.0f, 0.0f/8.0f, 16.0f/48.0f, 8.0f/8.0f},   // front
+        {16.0f/48.0f,0.0f/8.0f, 24.0f/48.0f, 8.0f/8.0f},   // right
+        {24.0f/48.0f,0.0f/8.0f, 32.0f/48.0f, 8.0f/8.0f},   // back
+        {32.0f/48.0f,0.0f/8.0f, 40.0f/48.0f, 8.0f/8.0f},   // top
+        {40.0f/48.0f,0.0f/8.0f, 48.0f/48.0f, 8.0f/8.0f}    // bottom
+    }};
+    const std::array<UVRect, 6> limbUv = {{
+        {0.0f/24.0f,  0.0f/16.0f,  4.0f/24.0f, 12.0f/16.0f}, // left
+        {4.0f/24.0f,  0.0f/16.0f,  8.0f/24.0f, 12.0f/16.0f}, // front
+        {8.0f/24.0f,  0.0f/16.0f, 12.0f/24.0f, 12.0f/16.0f}, // right
+        {12.0f/24.0f, 0.0f/16.0f, 16.0f/24.0f, 12.0f/16.0f}, // back
+        {16.0f/24.0f,12.0f/16.0f, 20.0f/24.0f, 16.0f/16.0f}, // top
+        {20.0f/24.0f,12.0f/16.0f, 24.0f/24.0f, 16.0f/16.0f}  // bottom
+    }};
+    const std::array<UVRect, 6> bodyUv = {{
+        {0.0f/40.0f,  0.0f/16.0f,  4.0f/40.0f, 12.0f/16.0f}, // left
+        {4.0f/40.0f,  0.0f/16.0f, 12.0f/40.0f, 12.0f/16.0f}, // front
+        {12.0f/40.0f, 0.0f/16.0f, 16.0f/40.0f, 12.0f/16.0f}, // right
+        {16.0f/40.0f, 0.0f/16.0f, 24.0f/40.0f, 12.0f/16.0f}, // back
+        {24.0f/40.0f,12.0f/16.0f, 32.0f/40.0f, 16.0f/16.0f}, // top
+        {32.0f/40.0f,12.0f/16.0f, 40.0f/40.0f, 16.0f/16.0f}  // bottom
+    }};
+    // Модель высотой 1.8 блока: ноги 0.75, туловище 0.75, голова 0.5 с перекрытием 0.2 по шее.
+    drawBox(glm::vec3(feetPos.x, y + 0.75f, feetPos.z), glm::vec3(0.5f, 0.75f, 0.25f), playerTexBody, bodyUv);
+    drawBox(glm::vec3(feetPos.x, y + 1.3f, feetPos.z), glm::vec3(0.5f, 0.5f, 0.5f), playerTexHead, headUv);
+    drawBox(glm::vec3(feetPos.x - 0.375f, y + 0.75f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmL, limbUv);
+    drawBox(glm::vec3(feetPos.x + 0.375f, y + 0.75f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmR, limbUv);
+    drawBox(glm::vec3(feetPos.x - 0.125f, y, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegL, limbUv);
+    drawBox(glm::vec3(feetPos.x + 0.125f, y, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegR, limbUv);
 }
 
 void renderGame(int screenW, int screenH, float currentTime) {
@@ -5330,7 +5395,17 @@ void renderGame(int screenW, int screenH, float currentTime) {
 
     glm::mat4 model(1.0f);
     updateGameplayCamera();
-    glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
+    glm::vec3 safeRenderCameraPos = renderCameraPos;
+    glm::vec3 safeCameraFront = cameraFront;
+    if (!std::isfinite(safeRenderCameraPos.x) || !std::isfinite(safeRenderCameraPos.y) || !std::isfinite(safeRenderCameraPos.z)) {
+        safeRenderCameraPos = cameraPos;
+    }
+    if (!std::isfinite(safeCameraFront.x) || !std::isfinite(safeCameraFront.y) || !std::isfinite(safeCameraFront.z) || glm::length(safeCameraFront) < 0.001f) {
+        safeCameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+    } else {
+        safeCameraFront = glm::normalize(safeCameraFront);
+    }
+    glm::mat4 view = glm::lookAt(safeRenderCameraPos, safeRenderCameraPos + safeCameraFront, cameraUp);
     
     // ИСПОЛЬЗУЕМ currentFOV ВМЕСТО ФИКСИРОВАННОГО ЗНАЧЕНИЯ 65.0f
     glm::mat4 proj = glm::perspective(glm::radians(currentFOV), 
@@ -5354,20 +5429,23 @@ void renderGame(int screenW, int screenH, float currentTime) {
 
     // Рендер воды (с сортировкой)
     updateWaterChunksCache();
-    if (glm::distance(cameraPos, lastCameraPosForWaterSort) > 0.5f) {
+    if (glm::distance(safeRenderCameraPos, lastCameraPosForWaterSort) > 0.5f) {
         std::sort(waterChunksCache.begin(), waterChunksCache.end(), [&](Chunk* a, Chunk* b) {
             glm::vec3 ca(a->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, a->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
             glm::vec3 cb(b->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, b->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
-            return glm::distance(cameraPos, ca) > glm::distance(cameraPos, cb);
+            return glm::distance(safeRenderCameraPos, ca) > glm::distance(safeRenderCameraPos, cb);
         });
-        lastCameraPosForWaterSort = cameraPos;
+        lastCameraPosForWaterSort = safeRenderCameraPos;
     }
     for (Chunk* ch : waterChunksCache)
         ch->renderWater();
 
     if (cameraMode == CameraMode::ThirdPersonBack) {
+        GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+        if (cullWasEnabled) glDisable(GL_CULL_FACE);
         glm::vec3 feetPos = gameplayRayOrigin - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
         renderPlayerModel(feetPos, cameraFront, currentTime);
+        if (cullWasEnabled) glEnable(GL_CULL_FACE);
     }
 
     // =========================================================

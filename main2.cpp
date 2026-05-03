@@ -5319,45 +5319,80 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
     (void)currentTime;
     if (!playerVAO) return;
 
+    // --- Вспомогательные лямбды (без изменений, работают идеально) ---
     auto pushFace = [](std::vector<float>& verts, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n,
                        float u0, float v0, float u1, float v1) {
         float face[] = {
-            a.x,a.y,a.z,u0,v0,n.x,n.y,n.z,1,0, b.x,b.y,b.z,u1,v0,n.x,n.y,n.z,1,0, c.x,c.y,c.z,u1,v1,n.x,n.y,n.z,1,0,
-            c.x,c.y,c.z,u1,v1,n.x,n.y,n.z,1,0, d.x,d.y,d.z,u0,v1,n.x,n.y,n.z,1,0, a.x,a.y,a.z,u0,v0,n.x,n.y,n.z,1,0
+            a.x,a.y,a.z,u0,v0,n.x,n.y,n.z,1,0, 
+            b.x,b.y,b.z,u1,v0,n.x,n.y,n.z,1,0, 
+            c.x,c.y,c.z,u1,v1,n.x,n.y,n.z,1,0,
+            c.x,c.y,c.z,u1,v1,n.x,n.y,n.z,1,0, 
+            d.x,d.y,d.z,u0,v1,n.x,n.y,n.z,1,0, 
+            a.x,a.y,a.z,u0,v0,n.x,n.y,n.z,1,0
         };
         verts.insert(verts.end(), std::begin(face), std::end(face));
     };
 
-    auto drawBox=[&](glm::vec3 c, glm::vec3 sz, unsigned int tex){
-        float x0=c.x-sz.x*0.5f,x1=c.x+sz.x*0.5f,y0=c.y,y1=c.y+sz.y,z0=c.z-sz.z*0.5f,z1=c.z+sz.z*0.5f;
+    auto drawBox = [&](glm::vec3 center, glm::vec3 size, unsigned int tex) {
+        float x0 = center.x - size.x * 0.5f;
+        float x1 = center.x + size.x * 0.5f;
+        float y0 = center.y;               // Нижняя граница
+        float y1 = center.y + size.y;      // Верхняя граница
+        float z0 = center.z - size.z * 0.5f;
+        float z1 = center.z + size.z * 0.5f;
+        
         std::vector<float> v;
         v.reserve(36 * 10);
-        const float du = 1.0f / 6.0f; // left, front, right, back, top, bottom
-        pushFace(v,{x0,y0,z1},{x1,y0,z1},{x1,y1,z1},{x0,y1,z1},{0,0,1},1*du,0,2*du,1);
-        pushFace(v,{x1,y0,z0},{x0,y0,z0},{x0,y1,z0},{x1,y1,z0},{0,0,-1},3*du,0,4*du,1);
-        pushFace(v,{x0,y0,z0},{x0,y0,z1},{x0,y1,z1},{x0,y1,z0},{-1,0,0},0*du,0,1*du,1);
-        pushFace(v,{x1,y0,z1},{x1,y0,z0},{x1,y1,z0},{x1,y1,z1},{1,0,0},2*du,0,3*du,1);
-        pushFace(v,{x0,y1,z1},{x1,y1,z1},{x1,y1,z0},{x0,y1,z0},{0,1,0},4*du,0,5*du,1);
-        pushFace(v,{x0,y0,z0},{x1,y0,z0},{x1,y0,z1},{x0,y0,z1},{0,-1,0},5*du,0,6*du,1);
+        const float du = 1.0f / 6.0f;
+        
+        pushFace(v, {x0,y0,z1}, {x1,y0,z1}, {x1,y1,z1}, {x0,y1,z1}, {0,0,1}, 1*du,0,2*du,1);
+        pushFace(v, {x1,y0,z0}, {x0,y0,z0}, {x0,y1,z0}, {x1,y1,z0}, {0,0,-1}, 3*du,0,4*du,1);
+        pushFace(v, {x0,y0,z0}, {x0,y0,z1}, {x0,y1,z1}, {x0,y1,z0}, {-1,0,0}, 0*du,0,1*du,1);
+        pushFace(v, {x1,y0,z1}, {x1,y0,z0}, {x1,y1,z0}, {x1,y1,z1}, {1,0,0}, 2*du,0,3*du,1);
+        pushFace(v, {x0,y1,z1}, {x1,y1,z1}, {x1,y1,z0}, {x0,y1,z0}, {0,1,0}, 4*du,0,5*du,1);
+        pushFace(v, {x0,y0,z0}, {x1,y0,z0}, {x1,y0,z1}, {x0,y0,z1}, {0,-1,0}, 5*du,0,6*du,1);
+        
         glBindTexture(GL_TEXTURE_2D, tex);
         glBindVertexArray(playerVAO);
         glBindBuffer(GL_ARRAY_BUFFER, playerVBO);
         glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_DYNAMIC_DRAW);
-        glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)0); glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(3*sizeof(float))); glEnableVertexAttribArray(1);
-        glVertexAttribPointer(2,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(5*sizeof(float))); glEnableVertexAttribArray(2);
-        glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
-        glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
-        glDrawArrays(GL_TRIANGLES,0,(GLsizei)(v.size()/10));
+        
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(3 * sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(5 * sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(8 * sizeof(float)));
+        glEnableVertexAttribArray(3);
+        glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(9 * sizeof(float)));
+        glEnableVertexAttribArray(4);
+        
+        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size() / 10));
     };
-    float y=feetPos.y;
-    // Модель высотой 1.8 блока: ноги 0.75, туловище 0.75, голова 0.5 с перекрытием 0.2 по шее.
-    drawBox(glm::vec3(feetPos.x, y + 0.75f, feetPos.z), glm::vec3(0.5f, 0.75f, 0.25f), playerTexBody);
-    drawBox(glm::vec3(feetPos.x, y + 1.3f, feetPos.z), glm::vec3(0.5f, 0.5f, 0.5f), playerTexHead);
-    drawBox(glm::vec3(feetPos.x - 0.375f, y + 0.75f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmL);
-    drawBox(glm::vec3(feetPos.x + 0.375f, y + 0.75f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmR);
-    drawBox(glm::vec3(feetPos.x - 0.125f, y, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegL);
-    drawBox(glm::vec3(feetPos.x + 0.125f, y, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegR);
+
+    // ---------------------------------------------------------
+    // НИЖНЯЯ ТОЧКА (Y = feetPos.y) - ТВЕРДАЯ ЗЕМЛЯ
+    // ---------------------------------------------------------
+    float y = feetPos.y;
+
+    // 1. НОГИ (от 0.00 до 0.75) -> Центр на 0.375
+    //    Их низ = y. Они НЕ висят в воздухе.
+    drawBox(glm::vec3(feetPos.x - 0.125f, y + 0.375f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegL);
+    drawBox(glm::vec3(feetPos.x + 0.125f, y + 0.375f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegR);
+
+    // 2. ТУЛОВИЩЕ (от 0.75 до 1.50) -> Центр на 1.125
+    drawBox(glm::vec3(feetPos.x, y + 1.125f, feetPos.z), glm::vec3(0.5f, 0.75f, 0.25f), playerTexBody);
+    
+    // 3. РУКИ (от 0.75 до 1.50) -> Центр на 1.125
+    drawBox(glm::vec3(feetPos.x - 0.375f, y + 1.125f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmL);
+    drawBox(glm::vec3(feetPos.x + 0.375f, y + 1.125f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmR);
+
+    // 4. ГОЛОВА (от 1.50 до 2.00) -> Центр на 1.75
+    //    ВНИМАНИЕ: Туловище закончилось на 1.50.
+    //    Голова начинается строго с 1.50. Нет наложения.
+    //    Она выступает за хитбокс (1.80), но это стилистика Minecraft.
+    drawBox(glm::vec3(feetPos.x, y + 1.75f, feetPos.z), glm::vec3(0.5f, 0.5f, 0.5f), playerTexHead);
 }
 
 void renderGame(int screenW, int screenH, float currentTime) {

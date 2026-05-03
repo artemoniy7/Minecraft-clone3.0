@@ -5297,6 +5297,19 @@ void initPlayerRenderer() {
     playerTexArmR = loadTextureStrip("textures/entity/player/arm_right.png", true);
     playerTexLegL = loadTextureStrip("textures/entity/player/leg_left.png", true);
     playerTexLegR = loadTextureStrip("textures/entity/player/leg_right.png", true);
+    auto setupPlayerTex = [](unsigned int tex) {
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    };
+    setupPlayerTex(playerTexHead);
+    setupPlayerTex(playerTexBody);
+    setupPlayerTex(playerTexArmL);
+    setupPlayerTex(playerTexArmR);
+    setupPlayerTex(playerTexLegL);
+    setupPlayerTex(playerTexLegR);
     glGenVertexArrays(1, &playerVAO);
     glGenBuffers(1, &playerVBO);
 }
@@ -5338,12 +5351,13 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
         glDrawArrays(GL_TRIANGLES,0,(GLsizei)(v.size()/10));
     };
     float y=feetPos.y;
-    drawBox(glm::vec3(feetPos.x, y+0.6f, feetPos.z), glm::vec3(0.5f,0.72f,0.25f), playerTexBody);
-    drawBox(glm::vec3(feetPos.x, y+1.32f, feetPos.z), glm::vec3(0.6f,0.48f,0.6f), playerTexHead);
-    drawBox(glm::vec3(feetPos.x-0.38f, y+0.6f, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexArmL);
-    drawBox(glm::vec3(feetPos.x+0.38f, y+0.6f, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexArmR);
-    drawBox(glm::vec3(feetPos.x-0.15f, y, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexLegL);
-    drawBox(glm::vec3(feetPos.x+0.15f, y, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexLegR);
+    // Модель высотой 1.8 блока: ноги 0.75, туловище 0.75, голова 0.5 с перекрытием 0.2 по шее.
+    drawBox(glm::vec3(feetPos.x, y + 0.75f, feetPos.z), glm::vec3(0.5f, 0.75f, 0.25f), playerTexBody);
+    drawBox(glm::vec3(feetPos.x, y + 1.3f, feetPos.z), glm::vec3(0.5f, 0.5f, 0.5f), playerTexHead);
+    drawBox(glm::vec3(feetPos.x - 0.375f, y + 0.75f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmL);
+    drawBox(glm::vec3(feetPos.x + 0.375f, y + 0.75f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmR);
+    drawBox(glm::vec3(feetPos.x - 0.125f, y, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegL);
+    drawBox(glm::vec3(feetPos.x + 0.125f, y, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegR);
 }
 
 void renderGame(int screenW, int screenH, float currentTime) {

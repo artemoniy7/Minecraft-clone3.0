@@ -69,6 +69,16 @@ bool firstMouse = true;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
+
+enum class CameraMode { FirstPerson, ThirdPersonBack };
+CameraMode cameraMode = CameraMode::FirstPerson;
+glm::vec3 gameplayRayOrigin = cameraPos;
+glm::vec3 gameplayRayDir = cameraFront;
+float thirdPersonDistance = 3.2f;
+
+unsigned int playerTexHead = 0, playerTexBody = 0, playerTexArmL = 0, playerTexArmR = 0, playerTexLegL = 0, playerTexLegR = 0;
+unsigned int playerVAO = 0, playerVBO = 0;
+
 // ----------------------------------------------------------------------
 // Параметры чанков
 // ----------------------------------------------------------------------
@@ -140,6 +150,10 @@ void playRandomAmbientSound();
 void renderSingleBlockModel(int blockType);
 void renderItemIconFlat(int itemId, int screenX, int screenY, int size, int screenW, int screenH);
 void initCloudLayer();
+
+void initPlayerRenderer();
+void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float currentTime);
+void updateGameplayCamera();
 void renderCloudLayer(float currentTime);
 void addFaceToVertices(std::vector<float>& verts, 
     glm::vec3 v1, glm::vec3 v2, glm::vec3 v3, glm::vec3 v4,
@@ -1492,9 +1506,6 @@ void workerFunction() {
 unsigned int shaderProgram, reticleProgram, reticleVAO;
 unsigned int cloudTexture = 0, cloudVAO = 0, cloudVBO = 0;
 int u_time_location, u_isWater_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location;
-int u_tintColor_location;
-glm::vec3 grassTintColor(1.0f, 1.0f, 1.0f);
-glm::vec3 foliageTintColor(1.0f, 1.0f, 1.0f);
 
 struct Chunk;
 std::unordered_map<glm::ivec2, Chunk, hash_ivec2> loadedChunks;
@@ -3621,9 +3632,6 @@ struct Chunk {
             if (type==5 || !vao[type]) continue;
             auto it = blockTypes.find(type); if (it==blockTypes.end()) continue;
             glUniform1i(u_isWater_location, 0);
-            if (type == 1) glUniform3f(u_tintColor_location, grassTintColor.r, grassTintColor.g, grassTintColor.b);
-            else if (type == 7) glUniform3f(u_tintColor_location, foliageTintColor.r, foliageTintColor.g, foliageTintColor.b);
-            else glUniform3f(u_tintColor_location, 1.0f, 1.0f, 1.0f);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, it->second.textureID);
             glBindVertexArray(vao[type]); glDrawArrays(GL_TRIANGLES, 0, vertexCount[type]);
         }
@@ -3632,7 +3640,6 @@ struct Chunk {
         if (!meshReady || !vao[5]) return;
         glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glDepthMask(GL_FALSE);
         glUniform1i(u_isWater_location, 1);
-        glUniform3f(u_tintColor_location, 1.0f, 1.0f, 1.0f);
         glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, blockTypes[5].textureID);
         glBindVertexArray(vao[5]); glDrawArrays(GL_TRIANGLES, 0, vertexCount[5]);
         glDepthMask(GL_TRUE); glDisable(GL_BLEND);
@@ -3913,34 +3920,7 @@ unsigned int loadTextureStrip(const char* path, bool forceAlpha) {
     stbi_image_free(data); return tex;
 }
 
-glm::vec3 sampleMinecraftColormapColor(const char* path, float temperature, float rainfall) {
-    int w, h, channels;
-    stbi_uc* data = stbi_load(path, &w, &h, &channels, 4);
-    if (!data || w <= 0 || h <= 0) {
-        if (data) stbi_image_free(data);
-        return glm::vec3(1.0f);
-    }
-
-    temperature = std::clamp(temperature, 0.0f, 1.0f);
-    rainfall = std::clamp(rainfall, 0.0f, 1.0f);
-    rainfall *= temperature;
-
-    int x = static_cast<int>((1.0f - temperature) * static_cast<float>(w - 1));
-    int y = static_cast<int>((1.0f - rainfall) * static_cast<float>(h - 1));
-    x = std::clamp(x, 0, w - 1);
-    y = std::clamp(y, 0, h - 1);
-
-    int idx = (y * w + x) * 4;
-    glm::vec3 color(
-        static_cast<float>(data[idx]) / 255.0f,
-        static_cast<float>(data[idx + 1]) / 255.0f,
-        static_cast<float>(data[idx + 2]) / 255.0f
-    );
-    stbi_image_free(data);
-    return color;
-}
-
-    bool loadBlockConfig(const std::string& path) {
+bool loadBlockConfig(const std::string& path) {
     std::ifstream f(path);
     if (!f.is_open()) return false;
     json data = json::parse(f);
@@ -3966,10 +3946,6 @@ glm::vec3 sampleMinecraftColormapColor(const char* path, float temperature, floa
             }
         }
     }
-    // Базовые климатические значения обычного региона (Plains, 1.7.10):
-    // температура 0.8, влажность 0.4.
-    grassTintColor = sampleMinecraftColormapColor("textures/colormap/grass.png", 0.8f, 0.4f);
-    foliageTintColor = sampleMinecraftColormapColor("textures/colormap/foliage.png", 0.8f, 0.4f);
     return !blockTypes.empty();
 }
 
@@ -4279,9 +4255,6 @@ void renderSingleBlockModel(int blockType) {
     
     auto it = blockTypes.find(blockType);
     if (it != blockTypes.end()) {
-        if (blockType == 1) glUniform3f(u_tintColor_location, grassTintColor.r, grassTintColor.g, grassTintColor.b);
-        else if (blockType == 7) glUniform3f(u_tintColor_location, foliageTintColor.r, foliageTintColor.g, foliageTintColor.b);
-        else glUniform3f(u_tintColor_location, 1.0f, 1.0f, 1.0f);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, it->second.textureID);
         glBindVertexArray(singleBlockVAO[blockType]);
@@ -5113,6 +5086,14 @@ void updateGame(GLFWwindow* window, float deltaTime) {
 void processInputInGame(GLFWwindow* window, float deltaTime) {
     static bool escWasPressed = false;
     static bool eWasPressed = false;
+
+    static bool f5WasPressed = false;
+    bool f5Pressed = glfwGetKey(window, GLFW_KEY_F5) == GLFW_PRESS;
+    if (f5Pressed && !f5WasPressed) {
+        cameraMode = (cameraMode == CameraMode::FirstPerson) ? CameraMode::ThirdPersonBack : CameraMode::FirstPerson;
+    }
+    f5WasPressed = f5Pressed;
+
     
     // Обработка ESC
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
@@ -5290,6 +5271,55 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     }
 }
 
+
+void updateGameplayCamera() {
+    glm::vec3 feetPos = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
+    gameplayRayOrigin = cameraPos;
+    gameplayRayDir = cameraFront;
+    if (cameraMode == CameraMode::ThirdPersonBack) {
+        glm::vec3 back = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
+        if (glm::length(back) < 0.001f) back = glm::vec3(0,0,-1);
+        cameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT + 0.2f, 0.0f) - back * thirdPersonDistance;
+    }
+}
+
+void initPlayerRenderer() {
+    playerTexHead = loadTextureStrip("textures/entity/player/head.png", true);
+    playerTexBody = loadTextureStrip("textures/entity/player/body.png", true);
+    playerTexArmL = loadTextureStrip("textures/entity/player/arm_left.png", true);
+    playerTexArmR = loadTextureStrip("textures/entity/player/arm.right.png", true);
+    playerTexLegL = loadTextureStrip("textures/entity/player/leg_left.png", true);
+    playerTexLegR = loadTextureStrip("textures/entity/player/leg_right.png", true);
+    glGenVertexArrays(1, &playerVAO);
+    glGenBuffers(1, &playerVBO);
+}
+
+void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float currentTime) {
+    (void)currentTime;
+    if (!playerVAO) return;
+    auto drawBox=[&](glm::vec3 c, glm::vec3 sz, unsigned int tex){
+        float x0=c.x-sz.x*0.5f,x1=c.x+sz.x*0.5f,y0=c.y,y1=c.y+sz.y,z0=c.z-sz.z*0.5f,z1=c.z+sz.z*0.5f;
+        float v[]={x0,y0,z1,0,0,0,0,1,1,0, x1,y0,z1,1,0,0,0,1,1,0, x1,y1,z1,1,1,0,0,1,1,0, x1,y1,z1,1,1,0,0,1,1,0, x0,y1,z1,0,1,0,0,1,1,0, x0,y0,z1,0,0,0,0,1,1,0};
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glBindVertexArray(playerVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, playerVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(v), v, GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)0); glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(3*sizeof(float))); glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(5*sizeof(float))); glEnableVertexAttribArray(2);
+        glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
+        glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
+        glDrawArrays(GL_TRIANGLES,0,6);
+    };
+    float y=feetPos.y;
+    drawBox(glm::vec3(feetPos.x, y+0.6f, feetPos.z), glm::vec3(0.5f,0.72f,0.25f), playerTexBody);
+    drawBox(glm::vec3(feetPos.x, y+1.32f, feetPos.z), glm::vec3(0.6f,0.48f,0.6f), playerTexHead);
+    drawBox(glm::vec3(feetPos.x-0.38f, y+0.6f, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexArmL);
+    drawBox(glm::vec3(feetPos.x+0.38f, y+0.6f, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexArmR);
+    drawBox(glm::vec3(feetPos.x-0.15f, y, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexLegL);
+    drawBox(glm::vec3(feetPos.x+0.15f, y, feetPos.z), glm::vec3(0.24f,0.72f,0.24f), playerTexLegR);
+}
+
 void renderGame(int screenW, int screenH, float currentTime) {
     glm::vec3 sunDir, skyColor;
     float sunIntensity, ambientBase;
@@ -5299,6 +5329,7 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     glm::mat4 model(1.0f);
+    updateGameplayCamera();
     glm::mat4 view = glm::lookAt(cameraPos, cameraPos + cameraFront, cameraUp);
     
     // ИСПОЛЬЗУЕМ currentFOV ВМЕСТО ФИКСИРОВАННОГО ЗНАЧЕНИЯ 65.0f
@@ -5333,6 +5364,11 @@ void renderGame(int screenW, int screenH, float currentTime) {
     }
     for (Chunk* ch : waterChunksCache)
         ch->renderWater();
+
+    if (cameraMode == CameraMode::ThirdPersonBack) {
+        glm::vec3 feetPos = gameplayRayOrigin - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
+        renderPlayerModel(feetPos, cameraFront, currentTime);
+    }
 
     // =========================================================
     // HUD И ИНВЕНТАРЬ
@@ -5577,9 +5613,9 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     } else if (currentState == GameState::IN_GAME) {
         if (action != GLFW_PRESS) return;
         if (!movementEnabled) return;
-        glm::vec3 rayDir = cameraFront;
+        glm::vec3 rayDir = gameplayRayDir;
         int hx, hy, hz, face;
-        if (rayCast(cameraPos, rayDir, hx, hy, hz, face, 10.0f)) {
+        if (rayCast(gameplayRayOrigin, rayDir, hx, hy, hz, face, 10.0f)) {
             if (button == GLFW_MOUSE_BUTTON_LEFT) {
                 int blockType = getBlockAt(hx, hy, hz);
                 if (blockType == 5) return;
@@ -5674,7 +5710,6 @@ const char *fragmentShaderSource = R"(
 #version 330 core
 in vec2 TexCoord; out vec4 FragColor;
 uniform sampler2D ourTexture; uniform float u_time; uniform int u_isWater;
-uniform vec3 u_tintColor;
 uniform vec3 u_sunDir; uniform float u_sunIntensity; uniform float u_ambientBase;
 in vec3 FragPos; in vec3 Normal; in float LightLevel; in float BlockLightLevel;
 void main() {
@@ -5685,7 +5720,6 @@ void main() {
         uv.y = uv.y / frames + floor(frame) / frames;
     }
     vec4 color = texture(ourTexture, uv); if (u_isWater==1) color.a = 0.7;
-    color.rgb *= u_tintColor;
     vec3 n = normalize(Normal);
     float vertexLight = clamp(LightLevel, 0.0, 1.0);
     float blockLightOnly = clamp(BlockLightLevel, 0.0, 1.0);
@@ -5772,11 +5806,9 @@ int main() {
     glUniform1i(glGetUniformLocation(shaderProgram,"ourTexture"),0);
     u_time_location = glGetUniformLocation(shaderProgram,"u_time");
     u_isWater_location = glGetUniformLocation(shaderProgram,"u_isWater");
-    u_tintColor_location = glGetUniformLocation(shaderProgram,"u_tintColor");
     u_sunDir_location = glGetUniformLocation(shaderProgram,"u_sunDir");
     u_sunIntensity_location = glGetUniformLocation(shaderProgram,"u_sunIntensity");
     u_ambientBase_location = glGetUniformLocation(shaderProgram,"u_ambientBase");
-    glUniform3f(u_tintColor_location, 1.0f, 1.0f, 1.0f);
     u_modelLoc = glGetUniformLocation(shaderProgram,"model");
     u_viewLoc = glGetUniformLocation(shaderProgram,"view");
     u_projLoc = glGetUniformLocation(shaderProgram,"projection");
@@ -5787,6 +5819,7 @@ int main() {
     loadSliderTextures();
     initFOVSlider(optionsSliders);
     initCloudLayer();
+    initPlayerRenderer();
     if (fs::exists("sounds/hurtflesh1.ogg")) {
         soundManager.loadPlayerSound("hurt", "sounds/hurtflesh1.ogg");
     }

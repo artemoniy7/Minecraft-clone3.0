@@ -5351,15 +5351,27 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
     bodyYaw = glm::radians(yaw + 90.0f);
     if (!playerVAO) return;
 
-    auto pushFace = [](std::vector<float>& verts, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n,
+    int sampleX = static_cast<int>(std::floor(feetPos.x));
+    int sampleZ = static_cast<int>(std::floor(feetPos.z));
+    int sampleYFeet = static_cast<int>(std::floor(feetPos.y + 0.2f));
+    int sampleYBody = static_cast<int>(std::floor(feetPos.y + 1.0f));
+    int sampleYHead = static_cast<int>(std::floor(feetPos.y + 1.6f));
+    uint8_t localBlockLight = std::max({
+        getBlockLightAt(sampleX, sampleYFeet, sampleZ),
+        getBlockLightAt(sampleX, sampleYBody, sampleZ),
+        getBlockLightAt(sampleX, sampleYHead, sampleZ)
+    });
+    float playerBlockLight = static_cast<float>(localBlockLight) / static_cast<float>(MAX_LIGHT);
+
+    auto pushFace = [&](std::vector<float>& verts, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n,
                        float u0, float v0, float u1, float v1) {
         float face[] = {
-            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,0,
-            b.x,b.y,b.z,u1,v1,n.x,n.y,n.z,1,0,
-            c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,0,
-            c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,0,
-            d.x,d.y,d.z,u0,v0,n.x,n.y,n.z,1,0,
-            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,0
+            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,playerBlockLight,   // Исправлено: v1 вместо v0
+            b.x,b.y,b.z,u1,v1,n.x,n.y,n.z,1,playerBlockLight,
+            c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,playerBlockLight,
+            c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,playerBlockLight,
+            d.x,d.y,d.z,u0,v0,n.x,n.y,n.z,1,playerBlockLight,
+            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,playerBlockLight
         };
         verts.insert(verts.end(), std::begin(face), std::end(face));
     };

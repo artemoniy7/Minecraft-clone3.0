@@ -5599,6 +5599,16 @@ void renderGame(int screenW, int screenH, float currentTime) {
 void initCloudLayer() {
     cloudTexture = loadTextureStrip("textures/environment/clouds.png", true);
     rainTexture = loadTextureStrip("textures/environment/rain.png", true);
+    if (rainTexture) {
+        glBindTexture(GL_TEXTURE_2D, rainTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        // Убираем mip-уровни, чтобы не тянуть чёрный фон с соседних texel при альфа-границах капель.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    }
 
     const float y = 120.0f;
     const float halfSize = 2048.0f;

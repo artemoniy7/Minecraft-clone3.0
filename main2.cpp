@@ -5350,7 +5350,7 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
         flatLook = glm::normalize(flatLook);
         // Тело в 3-м лице всегда смотрит туда же, куда направлена камера.
         // Модель собрана с базовым "вперёд" вдоль -Z, поэтому инвертируем XZ при переводе в yaw.
-        bodyYaw = std::atan2(-flatLook.x, -flatLook.z);
+        bodyYaw = std::atan2(flatLook.x, -flatLook.z);
     }
     if (!playerVAO) return;
 
@@ -5370,15 +5370,15 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
     struct UVRect { float u0, v0, u1, v1; };
     
     auto rotateAroundFeetY = [&](const glm::vec3& p) {
-        float s = std::sin(bodyYaw);
-        float c = std::cos(bodyYaw);
+        float s = std::sin(-bodyYaw);
+        float c = std::cos(-bodyYaw);
         glm::vec3 rel = p - feetPos;
         return feetPos + glm::vec3(rel.x * c - rel.z * s, rel.y, rel.x * s + rel.z * c);
     };
 
     auto rotateNormalY = [&](const glm::vec3& n) {
-        float s = std::sin(bodyYaw);
-        float c = std::cos(bodyYaw);
+        float s = std::sin(-bodyYaw);
+        float c = std::cos(-bodyYaw);
         return glm::vec3(n.x * c - n.z * s, n.y, n.x * s + n.z * c);
     };
 

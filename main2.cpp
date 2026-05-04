@@ -5659,38 +5659,49 @@ void renderCloudLayer(float currentTime) {
 void renderRainLayer(float currentTime) {
     if (!isRaining || !rainTexture || !rainVAO || !rainVBO) return;
 
-    const float radius = 16.0f;
-    const float heightTop = 14.0f;
-    const float heightBottom = -2.0f;
+    const float radius = 14.0f;
+    const float heightTop = 10.0f;
+    const float heightBottom = -4.0f;
 
     std::vector<float> v;
-    v.reserve(64 * 6 * 10);
+    v.reserve(2048 * 6 * 10);
 
     glm::vec3 camFlat(renderCameraPos.x, 0.0f, renderCameraPos.z);
     glm::vec3 right = glm::normalize(glm::vec3(cameraFront.z, 0.0f, -cameraFront.x));
     if (glm::length(right) < 0.001f) right = glm::vec3(1,0,0);
+    glm::vec3 forwardFlat = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
+    if (glm::length(forwardFlat) < 0.001f) forwardFlat = glm::vec3(0,0,-1);
 
     int minX = (int)std::floor(camFlat.x - radius);
     int maxX = (int)std::ceil(camFlat.x + radius);
     int minZ = (int)std::floor(camFlat.z - radius);
     int maxZ = (int)std::ceil(camFlat.z + radius);
 
-    float vScroll = std::fmod(currentTime * 1.8f, 1.0f);
-    for (int x = minX; x <= maxX; x += 2) {
-        for (int z = minZ; z <= maxZ; z += 2) {
-            float fx = x + 0.5f;
-            float fz = z + 0.5f;
-            glm::vec3 center(fx, cameraPos.y, fz);
-            glm::vec3 half = right * 0.20f;
-            glm::vec3 a = center - half + glm::vec3(0,heightTop,0);
-            glm::vec3 b = center + half + glm::vec3(0,heightTop,0);
-            glm::vec3 c = center + half + glm::vec3(0,heightBottom,0);
-            glm::vec3 d = center - half + glm::vec3(0,heightBottom,0);
-            float quad[] = {
-                a.x,a.y,a.z,0,0+vScroll,0,0,1,1,0.85f, b.x,b.y,b.z,1,0+vScroll,0,0,1,1,0.85f, c.x,c.y,c.z,1,1+vScroll,0,0,1,1,0.85f,
-                c.x,c.y,c.z,1,1+vScroll,0,0,1,1,0.85f, d.x,d.y,d.z,0,1+vScroll,0,0,1,1,0.85f, a.x,a.y,a.z,0,0+vScroll,0,0,1,1,0.85f
-            };
-            v.insert(v.end(), std::begin(quad), std::end(quad));
+    float vScroll = std::fmod(-currentTime * 2.8f, 1.0f);
+    if (vScroll < 0.0f) vScroll += 1.0f;
+    auto appendRainQuad = [&](const glm::vec3& center, const glm::vec3& axis, float uvShift) {
+        glm::vec3 half = axis * 0.30f;
+        glm::vec3 a = center - half + glm::vec3(0,heightTop,0);
+        glm::vec3 b = center + half + glm::vec3(0,heightTop,0);
+        glm::vec3 c = center + half + glm::vec3(0,heightBottom,0);
+        glm::vec3 d = center - half + glm::vec3(0,heightBottom,0);
+        float quad[] = {
+            a.x,a.y,a.z,0,0+uvShift,0,0,1,1,0.9f, b.x,b.y,b.z,1,0+uvShift,0,0,1,1,0.9f, c.x,c.y,c.z,1,1+uvShift,0,0,1,1,0.9f,
+            c.x,c.y,c.z,1,1+uvShift,0,0,1,1,0.9f, d.x,d.y,d.z,0,1+uvShift,0,0,1,1,0.9f, a.x,a.y,a.z,0,0+uvShift,0,0,1,1,0.9f
+        };
+        v.insert(v.end(), std::begin(quad), std::end(quad));
+    };
+
+    for (int x = minX; x <= maxX; ++x) {
+        for (int z = minZ; z <= maxZ; ++z) {
+            uint32_t h = static_cast<uint32_t>((x * 73856093) ^ (z * 19349663));
+            if ((h % 100) > 78) continue;
+            float jitterX = ((h & 0xF) / 15.0f - 0.5f) * 0.5f;
+            float jitterZ = (((h >> 4) & 0xF) / 15.0f - 0.5f) * 0.5f;
+            glm::vec3 center(x + 0.5f + jitterX, cameraPos.y, z + 0.5f + jitterZ);
+            float uvShift = std::fmod(vScroll + (h & 31) / 31.0f, 1.0f);
+            appendRainQuad(center, right, uvShift);
+            appendRainQuad(center, forwardFlat, uvShift);
         }
     }
 
@@ -5994,7 +6005,7 @@ void main() {
         uv.y = uv.y / frames + floor(frame) / frames;
     }
     vec4 color = texture(ourTexture, uv); if (u_isWater==1) color.a = 0.7;
-    if (u_isRain==1) color = vec4(vec3(0.78), color.a);
+    if (u_isRain==1) color = vec4(vec3(0.92, 0.94, 1.0), color.a);
     vec3 n = normalize(Normal);
     float vertexLight = clamp(LightLevel, 0.0, 1.0);
     float blockLightOnly = clamp(BlockLightLevel, 0.0, 1.0);

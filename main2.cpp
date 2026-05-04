@@ -1469,6 +1469,7 @@ std::unordered_map<glm::ivec2, std::shared_ptr<ChunkData>, hash_ivec2> pendingDa
 std::unordered_set<glm::ivec2, hash_ivec2> pendingLoad;
 std::unordered_set<glm::ivec2, hash_ivec2> pendingGen;
 std::atomic<bool> workerRunning(true);
+std::atomic<bool> fastChunkLoadingMode(false);
 std::thread workerThread;
 
 void workerFunction() {
@@ -1488,7 +1489,8 @@ void workerFunction() {
         }
         {
             std::unique_lock<std::mutex> lock(chunkMutex);
-            while (!pendingGen.empty() && processed < 20) {
+            const int maxProcessedPerTick = fastChunkLoadingMode ? 64 : 20;
+            while (!pendingGen.empty() && processed < maxProcessedPerTick) {
                 glm::ivec2 pos = *pendingGen.begin(); pendingGen.erase(pos);
                 lock.unlock();
                 auto data = generateChunk(pos.x, pos.y);
@@ -1497,7 +1499,10 @@ void workerFunction() {
                 processed++;
             }
         }
-        if (processed == 0) std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        if (processed == 0) {
+            const int idleSleepMs = fastChunkLoadingMode ? 1 : 30;
+            std::this_thread::sleep_for(std::chrono::milliseconds(idleSleepMs));
+        }
     }
 }
 
@@ -3815,7 +3820,8 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
     int centerCZ = (int)std::floor(cameraPos.z / CHUNK_SIZE_Z);
     static glm::ivec2 lastRequestedCenter(std::numeric_limits<int>::min(), std::numeric_limits<int>::min());
 
-    integratePendingChunkData(2);
+    const int integrateBudget = fastChunkLoadingMode ? 24 : 2;
+    integratePendingChunkData(integrateBudget);
 
     if (!loadedChunks.empty() && lastRequestedCenter.x == centerCX && lastRequestedCenter.y == centerCZ) {
         return;
@@ -4378,6 +4384,7 @@ void startNewGame() {
     playerPlaced = false;
     loadingTimer = 0.0f;
     isLoadingGame = false;
+    fastChunkLoadingMode = true;
 
     resetPlayerStateForNewWorld();
     fs::create_directories(getCurrentChunksPath());
@@ -4407,6 +4414,7 @@ void loadGame() {
     playerPlaced = false;
     loadingTimer = 0.0f;
     isLoadingGame = true;
+    fastChunkLoadingMode = true;
     initWorldNoise();
     workerThread = std::thread(workerFunction);
     updateChunksAroundCamera(cameraPos, true);
@@ -4444,6 +4452,7 @@ void exitToMenu(GLFWwindow* window, int& sw, int& sh) {
     }
     lastChunkForMesh = nullptr;
     lastChunkCoordsForMesh = glm::ivec2(0,0);
+    fastChunkLoadingMode = false;
     workerRunning = false;
     if (workerThread.joinable()) workerThread.join();
     workerRunning = true;
@@ -5055,13 +5064,14 @@ void updateGame(GLFWwindow* window, float deltaTime) {
     if (currentState == GameState::LOADING_GAME) {
         loadingTimer += deltaTime;
         updateChunksAroundCamera(cameraPos, isLoadingGame);
-        buildChunkMeshesNearCamera(8); // быстрее строим меши во время загрузки
+        buildChunkMeshesNearCamera(24); // максимальная скорость во время загрузки мира
         if (areChunksReady()) {
             if (!playerPlaced) {
                 placePlayerOnGround();
                 playerPlaced = true;
             }
             movementEnabled = true;
+            fastChunkLoadingMode = false;
             currentState = GameState::IN_GAME;
         }
         updateMusic();
@@ -5227,6 +5237,17 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     
     glm::vec3 feetPos = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     glm::vec3 actualDelta = applyCollision(feetPos, delta);
+
+    // Сохраняем фактическое горизонтальное движение за кадр,
+    // чтобы рендер модели корректно знал направление движения тела.
+    if (deltaTime > 0.00001f) {
+        playerVelocity.x = actualDelta.x / deltaTime;
+        playerVelocity.z = actualDelta.z / deltaTime;
+    } else {
+        playerVelocity.x = 0.0f;
+        playerVelocity.z = 0.0f;
+    }
+
     feetPos += actualDelta;
     cameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     
@@ -5279,14 +5300,17 @@ void updateGameplayCamera() {
     gameplayRayDir = cameraFront;
     renderCameraPos = cameraPos;
     if (cameraMode == CameraMode::ThirdPersonBack) {
-        glm::vec3 flatForward(cameraFront.x, 0.0f, cameraFront.z);
-        if (glm::length(flatForward) < 0.001f) {
-            flatForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        // Центр третьего лица — голова/глаза игрока, как в Minecraft.
+        glm::vec3 headCenter = feetPos + glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
+
+        glm::vec3 lookDir = cameraFront;
+        if (glm::length(lookDir) < 0.001f) {
+            lookDir = glm::vec3(0.0f, 0.0f, -1.0f);
         } else {
-            flatForward = glm::normalize(flatForward);
+            lookDir = glm::normalize(lookDir);
         }
-        glm::vec3 back = flatForward;
-        renderCameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT + 0.2f, 0.0f) - back * thirdPersonDistance;
+
+        renderCameraPos = headCenter - lookDir * thirdPersonDistance;
     }
 }
 
@@ -5318,8 +5342,16 @@ void initPlayerRenderer() {
 }
 
 void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float currentTime) {
-    (void)lookDir;
     (void)currentTime;
+    static float bodyYaw = 0.0f;
+
+    glm::vec3 flatLook(lookDir.x, 0.0f, lookDir.z);
+    if (glm::length(flatLook) > 0.001f) {
+        flatLook = glm::normalize(flatLook);
+        // Тело в 3-м лице всегда смотрит туда же, куда направлена камера.
+        // Модель собрана с базовым "вперёд" вдоль -Z, поэтому инвертируем XZ при переводе в yaw.
+        bodyYaw = std::atan2(flatLook.x, -flatLook.z);
+    }
     if (!playerVAO) return;
 
     auto pushFace = [](std::vector<float>& verts, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n,
@@ -5337,6 +5369,19 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
 
     struct UVRect { float u0, v0, u1, v1; };
     
+    auto rotateAroundFeetY = [&](const glm::vec3& p) {
+        float s = std::sin(bodyYaw);
+        float c = std::cos(bodyYaw);
+        glm::vec3 rel = p - feetPos;
+        return feetPos + glm::vec3(rel.x * c - rel.z * s, rel.y, rel.x * s + rel.z * c);
+    };
+
+    auto rotateNormalY = [&](const glm::vec3& n) {
+        float s = std::sin(bodyYaw);
+        float c = std::cos(bodyYaw);
+        return glm::vec3(n.x * c - n.z * s, n.y, n.x * s + n.z * c);
+    };
+
     auto drawBox = [&](glm::vec3 center, glm::vec3 size, unsigned int tex, const std::array<UVRect, 6>& uv) {
         float x0 = center.x - size.x * 0.5f;
         float x1 = center.x + size.x * 0.5f;
@@ -5345,22 +5390,31 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
         float z0 = center.z - size.z * 0.5f;
         float z1 = center.z + size.z * 0.5f;
         
+        glm::vec3 p000 = rotateAroundFeetY({x0,y0,z0});
+        glm::vec3 p001 = rotateAroundFeetY({x0,y0,z1});
+        glm::vec3 p010 = rotateAroundFeetY({x0,y1,z0});
+        glm::vec3 p011 = rotateAroundFeetY({x0,y1,z1});
+        glm::vec3 p100 = rotateAroundFeetY({x1,y0,z0});
+        glm::vec3 p101 = rotateAroundFeetY({x1,y0,z1});
+        glm::vec3 p110 = rotateAroundFeetY({x1,y1,z0});
+        glm::vec3 p111 = rotateAroundFeetY({x1,y1,z1});
+
         std::vector<float> v;
         v.reserve(36 * 10);
         
         // Порядок граней: ЛЕВАЯ, ПЕРЕДНЯЯ, ПРАВАЯ, ЗАДНЯЯ, ВЕРХНЯЯ, НИЖНЯЯ
         // Левая грань (X-)
-        pushFace(v, {x0,y0,z0}, {x0,y0,z1}, {x0,y1,z1}, {x0,y1,z0}, {-1,0,0}, uv[0].u0, uv[0].v0, uv[0].u1, uv[0].v1);
+        pushFace(v, p000, p001, p011, p010, rotateNormalY({-1,0,0}), uv[0].u0, uv[0].v0, uv[0].u1, uv[0].v1);
         // Передняя грань (Z+)
-        pushFace(v, {x1,y0,z1}, {x0,y0,z1}, {x0,y1,z1}, {x1,y1,z1}, {0,0,1}, uv[1].u0, uv[1].v0, uv[1].u1, uv[1].v1);
+        pushFace(v, p101, p001, p011, p111, rotateNormalY({0,0,1}), uv[1].u0, uv[1].v0, uv[1].u1, uv[1].v1);
         // Правая грань (X+)
-        pushFace(v, {x1,y0,z1}, {x1,y0,z0}, {x1,y1,z0}, {x1,y1,z1}, {1,0,0}, uv[2].u0, uv[2].v0, uv[2].u1, uv[2].v1);
+        pushFace(v, p101, p100, p110, p111, rotateNormalY({1,0,0}), uv[2].u0, uv[2].v0, uv[2].u1, uv[2].v1);
         // Задняя грань (Z-)
-        pushFace(v, {x0,y0,z0}, {x1,y0,z0}, {x1,y1,z0}, {x0,y1,z0}, {0,0,-1}, uv[3].u0, uv[3].v0, uv[3].u1, uv[3].v1);
+        pushFace(v, p000, p100, p110, p010, rotateNormalY({0,0,-1}), uv[3].u0, uv[3].v0, uv[3].u1, uv[3].v1);
         // Верхняя грань (Y+)
-        pushFace(v, {x0,y1,z1}, {x1,y1,z1}, {x1,y1,z0}, {x0,y1,z0}, {0,1,0}, uv[4].u0, uv[4].v0, uv[4].u1, uv[4].v1);
+        pushFace(v, p011, p111, p110, p010, rotateNormalY({0,1,0}), uv[4].u0, uv[4].v0, uv[4].u1, uv[4].v1);
         // Нижняя грань (Y-)
-        pushFace(v, {x1,y0,z1}, {x0,y0,z1}, {x0,y0,z0}, {x1,y0,z0}, {0,-1,0}, uv[5].u0, uv[5].v0, uv[5].u1, uv[5].v1);
+        pushFace(v, p101, p001, p000, p100, rotateNormalY({0,-1,0}), uv[5].u0, uv[5].v0, uv[5].u1, uv[5].v1);
         
         glBindTexture(GL_TEXTURE_2D, tex);
         glBindVertexArray(playerVAO);

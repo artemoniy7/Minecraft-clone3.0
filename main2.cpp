@@ -5495,9 +5495,13 @@ void renderGame(int screenW, int screenH, float currentTime) {
     float sunIntensity, ambientBase;
     evaluateDayNightCycle(currentTime, sunDir, sunIntensity, ambientBase, skyColor);
     if (isRaining) {
-        skyColor = glm::mix(skyColor, glm::vec3(0.40f, 0.42f, 0.45f), 0.72f);
-        sunIntensity *= 0.62f;
-        ambientBase *= 0.78f;
+        float dayBlend = glm::clamp((sunIntensity - 0.2f) / 0.8f, 0.0f, 1.0f);
+        glm::vec3 rainyDaySky(0.40f, 0.42f, 0.45f);
+        glm::vec3 rainyNightSky(0.06f, 0.07f, 0.10f);
+        glm::vec3 rainyTarget = glm::mix(rainyNightSky, rainyDaySky, dayBlend);
+        skyColor = glm::mix(skyColor, rainyTarget, 0.78f);
+        sunIntensity *= 0.55f;
+        ambientBase *= (0.60f + 0.20f * dayBlend);
     }
 
     glClearColor(skyColor.r, skyColor.g, skyColor.b, 1.0f);
@@ -5550,6 +5554,9 @@ void renderGame(int screenW, int screenH, float currentTime) {
     }
     for (Chunk* ch : waterChunksCache)
         ch->renderWater();
+
+    // Дождь рисуем после геометрии мира, чтобы капли корректно были видны перед камерой.
+    renderRainLayer(currentTime);
 
     // После рендера воды обязательно возвращаем обычный режим шейдера:
     // иначе UV-анимация воды (u_isWater=1) применяется и к модели игрока.

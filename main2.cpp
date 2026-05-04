@@ -5345,19 +5345,28 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
     (void)currentTime;
     static float bodyYaw = 0.0f;
 
-    glm::vec3 flatLook(lookDir.x, 0.0f, lookDir.z);
-    if (glm::length(flatLook) > 0.001f) {
-        flatLook = glm::normalize(flatLook);
-        // Тело в 3-м лице всегда смотрит туда же, куда направлена камера.
-        // Модель собрана с базовым "вперёд" вдоль -Z, поэтому инвертируем XZ при переводе в yaw.
-        bodyYaw = std::atan2(flatLook.x, -flatLook.z);
+    // Используем горизонтальную скорость для поворота тела при движении
+    glm::vec3 horizontalMove(playerVelocity.x, 0.0f, playerVelocity.z);
+    
+    if (glm::length(horizontalMove) > 0.1f) {
+        // Движемся - поворачиваем тело в направлении движения
+        horizontalMove = glm::normalize(horizontalMove);
+        bodyYaw = std::atan2(-horizontalMove.x, horizontalMove.z);
+    } else {
+        // Стоим на месте - поворачиваем тело в направлении взгляда
+        glm::vec3 flatLook(lookDir.x, 0.0f, lookDir.z);
+        if (glm::length(flatLook) > 0.001f) {
+            flatLook = glm::normalize(flatLook);
+            bodyYaw = std::atan2(flatLook.x, flatLook.z);
+        }
     }
+    
     if (!playerVAO) return;
 
     auto pushFace = [](std::vector<float>& verts, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n,
                        float u0, float v0, float u1, float v1) {
         float face[] = {
-            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,0,   // Исправлено: v1 вместо v0
+            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,0,
             b.x,b.y,b.z,u1,v1,n.x,n.y,n.z,1,0,
             c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,0,
             c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,0,
@@ -5369,16 +5378,18 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
 
     struct UVRect { float u0, v0, u1, v1; };
     
+    // УБРАН МИНУС ПЕРЕД bodyYaw
     auto rotateAroundFeetY = [&](const glm::vec3& p) {
-        float s = std::sin(-bodyYaw);
-        float c = std::cos(-bodyYaw);
+        float s = std::sin(bodyYaw);
+        float c = std::cos(bodyYaw);
         glm::vec3 rel = p - feetPos;
         return feetPos + glm::vec3(rel.x * c - rel.z * s, rel.y, rel.x * s + rel.z * c);
     };
 
+    // УБРАН МИНУС ПЕРЕД bodyYaw
     auto rotateNormalY = [&](const glm::vec3& n) {
-        float s = std::sin(-bodyYaw);
-        float c = std::cos(-bodyYaw);
+        float s = std::sin(bodyYaw);
+        float c = std::cos(bodyYaw);
         return glm::vec3(n.x * c - n.z * s, n.y, n.x * s + n.z * c);
     };
 
@@ -5402,7 +5413,6 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
         std::vector<float> v;
         v.reserve(36 * 10);
         
-        // Порядок граней: ЛЕВАЯ, ПЕРЕДНЯЯ, ПРАВАЯ, ЗАДНЯЯ, ВЕРХНЯЯ, НИЖНЯЯ
         // Левая грань (X-)
         pushFace(v, p000, p001, p011, p010, rotateNormalY({-1,0,0}), uv[0].u0, uv[0].v0, uv[0].u1, uv[0].v1);
         // Передняя грань (Z+)
@@ -5435,51 +5445,39 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
         glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size() / 10));
     };
     
-    
-    // UV для головы (64x64 текстура скина)
-    // Каждая грань 8x8 пикселей в зоне 48x8
     float y = feetPos.y;
-    // UV для головы (64x64 текстура скина) - ВЫСОТА 8 пикселей
+    
     const std::array<UVRect, 6> headUv = {{
-        {0.0f/48.0f, 0.0f/8.0f,  8.0f/48.0f, 1.0f},   // левая (8/8 = 1.0)
-        {8.0f/48.0f, 0.0f/8.0f, 16.0f/48.0f, 1.0f},   // передняя
-        {16.0f/48.0f,0.0f/8.0f, 24.0f/48.0f, 1.0f},   // правая
-        {24.0f/48.0f,0.0f/8.0f, 32.0f/48.0f, 1.0f},   // задняя
-        {32.0f/48.0f,0.0f/8.0f, 40.0f/48.0f, 1.0f},   // верхняя
-        {40.0f/48.0f,0.0f/8.0f, 48.0f/48.0f, 1.0f}    // нижняя
+        {0.0f/48.0f, 0.0f/8.0f,  8.0f/48.0f, 1.0f},
+        {8.0f/48.0f, 0.0f/8.0f, 16.0f/48.0f, 1.0f},
+        {16.0f/48.0f,0.0f/8.0f, 24.0f/48.0f, 1.0f},
+        {24.0f/48.0f,0.0f/8.0f, 32.0f/48.0f, 1.0f},
+        {32.0f/48.0f,0.0f/8.0f, 40.0f/48.0f, 1.0f},
+        {40.0f/48.0f,0.0f/8.0f, 48.0f/48.0f, 1.0f}
     }};
 
-    // UV для конечностей (руки и ноги) - ТЕКСТУРА 24x12
     const std::array<UVRect, 6> limbUv = {{
-        {0.0f/24.0f, 0.0f/12.0f,  4.0f/24.0f, 1.0f},   // левая (12/12 = 1.0)
-        {4.0f/24.0f, 0.0f/12.0f,  8.0f/24.0f, 1.0f},   // передняя
-        {8.0f/24.0f, 0.0f/12.0f, 12.0f/24.0f, 1.0f},   // правая
-        {12.0f/24.0f,0.0f/12.0f, 16.0f/24.0f, 1.0f},   // задняя
-        {16.0f/24.0f,8.0f/12.0f, 20.0f/24.0f, 1.0f},   // верхняя
-        {20.0f/24.0f,8.0f/12.0f, 24.0f/24.0f, 1.0f}    // нижняя
+        {0.0f/24.0f, 0.0f/12.0f,  4.0f/24.0f, 1.0f},
+        {4.0f/24.0f, 0.0f/12.0f,  8.0f/24.0f, 1.0f},
+        {8.0f/24.0f, 0.0f/12.0f, 12.0f/24.0f, 1.0f},
+        {12.0f/24.0f,0.0f/12.0f, 16.0f/24.0f, 1.0f},
+        {16.0f/24.0f,8.0f/12.0f, 20.0f/24.0f, 1.0f},
+        {20.0f/24.0f,8.0f/12.0f, 24.0f/24.0f, 1.0f}
     }};
 
-    // UV для туловища - ТЕКСТУРА 40x12
     const std::array<UVRect, 6> bodyUv = {{
-        {0.0f/40.0f, 0.0f/12.0f,  4.0f/40.0f, 1.0f},   // левая (12/12 = 1.0)
-        {4.0f/40.0f, 0.0f/12.0f, 12.0f/40.0f, 1.0f},   // передняя
-        {12.0f/40.0f,0.0f/12.0f, 16.0f/40.0f, 1.0f},   // правая
-        {16.0f/40.0f,0.0f/12.0f, 24.0f/40.0f, 1.0f},   // задняя
-        {24.0f/40.0f,8.0f/12.0f, 32.0f/40.0f, 1.0f},   // верхняя (крышка)
-        {32.0f/40.0f,8.0f/12.0f, 40.0f/40.0f, 1.0f}    // нижняя
+        {0.0f/40.0f, 0.0f/12.0f,  4.0f/40.0f, 1.0f},
+        {4.0f/40.0f, 0.0f/12.0f, 12.0f/40.0f, 1.0f},
+        {12.0f/40.0f,0.0f/12.0f, 16.0f/40.0f, 1.0f},
+        {16.0f/40.0f,0.0f/12.0f, 24.0f/40.0f, 1.0f},
+        {24.0f/40.0f,8.0f/12.0f, 32.0f/40.0f, 1.0f},
+        {32.0f/40.0f,8.0f/12.0f, 40.0f/40.0f, 1.0f}
     }};
     
-    // Туловище: от y+0.75 до y+1.50 (центр на y+1.125)
     drawBox(glm::vec3(feetPos.x, y + 0.75f, feetPos.z), glm::vec3(0.5f, 0.75f, 0.25f), playerTexBody, bodyUv);
-    
-    // Голова: от y+1.50 до y+2.00 (центр на y+1.75, выступает над хитбоксом)
     drawBox(glm::vec3(feetPos.x, y + 1.5f, feetPos.z), glm::vec3(0.5f, 0.5f, 0.5f), playerTexHead, headUv);
-    
-    // Руки: от y+0.75 до y+1.50 (центр на y+1.125)
     drawBox(glm::vec3(feetPos.x - 0.375f, y + 0.75f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmL, limbUv);
     drawBox(glm::vec3(feetPos.x + 0.375f, y + 0.75f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexArmR, limbUv);
-    
-    // Ноги: от y+0.00 до y+0.75 (центр на y+0.375)
     drawBox(glm::vec3(feetPos.x - 0.125f, y + 0.0f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegL, limbUv);
     drawBox(glm::vec3(feetPos.x + 0.125f, y + 0.0f, feetPos.z), glm::vec3(0.25f, 0.75f, 0.25f), playerTexLegR, limbUv);
 }

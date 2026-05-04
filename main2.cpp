@@ -5706,25 +5706,31 @@ void renderRainLayer(float currentTime) {
             const int ix = static_cast<int>(std::floor(worldX));
             const int iz = static_cast<int>(std::floor(worldZ));
             uint32_t h = static_cast<uint32_t>((ix * 73856093) ^ (iz * 19349663));
-            if ((h % 100) > 68) continue;
+            float densityBias = 68.0f;
+            if (dx * dx + dz * dz < 64.0f) densityBias = 92.0f; // Гуще в радиусе ~8 блоков от игрока.
+            if ((h % 100) > densityBias) continue;
 
-            float jitterX = ((h & 0x3FF) / 1023.0f - 0.5f) * gridSize;
-            float jitterZ = (((h >> 10) & 0x3FF) / 1023.0f - 0.5f) * gridSize;
-            float phase = ((h >> 20) & 0xFFF) / 4095.0f;
-            float fall = std::fmod(currentTime * fallSpeed + phase * heightRange, heightRange);
-            float fallProgress = fall / heightRange;
-            float y = rainTop - fall;
+            int dropCount = (dx * dx + dz * dz < 16.0f) ? 2 : 1; // Доп. капля совсем рядом с игроком.
+            for (int i = 0; i < dropCount; ++i) {
+                uint32_t hi = h ^ static_cast<uint32_t>(i * 0x9e3779b9u);
+                float jitterX = ((hi & 0x3FF) / 1023.0f - 0.5f) * gridSize;
+                float jitterZ = (((hi >> 10) & 0x3FF) / 1023.0f - 0.5f) * gridSize;
+                float phase = ((hi >> 20) & 0xFFF) / 4095.0f;
+                float fall = std::fmod(currentTime * fallSpeed + phase * heightRange, heightRange);
+                float fallProgress = fall / heightRange;
+                float y = rainTop - fall;
 
-            float width = dropWidth + (((h >> 5) & 0xFF) / 255.0f) * 0.018f;
-            float length = dropLength + (((h >> 13) & 0xFF) / 255.0f) * 0.55f;
-            float alpha = 0.34f + (((h >> 23) & 0xFF) / 255.0f) * 0.20f;
+                float width = dropWidth + (((hi >> 5) & 0xFF) / 255.0f) * 0.018f;
+                float length = dropLength + (((hi >> 13) & 0xFF) / 255.0f) * 0.55f;
+                float alpha = 0.34f + (((hi >> 23) & 0xFF) / 255.0f) * 0.20f;
 
-            glm::vec3 center(worldX + 0.5f * gridSize + jitterX, y, worldZ + 0.5f * gridSize + jitterZ);
-            center.x += windX * fallProgress;
-            center.z += windZ * fallProgress;
+                glm::vec3 center(worldX + 0.5f * gridSize + jitterX, y, worldZ + 0.5f * gridSize + jitterZ);
+                center.x += windX * fallProgress;
+                center.z += windZ * fallProgress;
 
-            if (center.y + length * 0.5f < rainBottom) continue;
-            appendDropQuad(center, length, width, alpha);
+                if (center.y + length * 0.5f < rainBottom) continue;
+                appendDropQuad(center, length, width, alpha);
+            }
         }
     }
 

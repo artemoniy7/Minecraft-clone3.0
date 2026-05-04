@@ -1469,6 +1469,7 @@ std::unordered_map<glm::ivec2, std::shared_ptr<ChunkData>, hash_ivec2> pendingDa
 std::unordered_set<glm::ivec2, hash_ivec2> pendingLoad;
 std::unordered_set<glm::ivec2, hash_ivec2> pendingGen;
 std::atomic<bool> workerRunning(true);
+std::atomic<bool> fastChunkLoadingMode(false);
 std::thread workerThread;
 
 void workerFunction() {
@@ -1488,7 +1489,8 @@ void workerFunction() {
         }
         {
             std::unique_lock<std::mutex> lock(chunkMutex);
-            while (!pendingGen.empty() && processed < 20) {
+            const int maxProcessedPerTick = fastChunkLoadingMode ? 64 : 20;
+            while (!pendingGen.empty() && processed < maxProcessedPerTick) {
                 glm::ivec2 pos = *pendingGen.begin(); pendingGen.erase(pos);
                 lock.unlock();
                 auto data = generateChunk(pos.x, pos.y);
@@ -1497,7 +1499,10 @@ void workerFunction() {
                 processed++;
             }
         }
-        if (processed == 0) std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        if (processed == 0) {
+            const int idleSleepMs = fastChunkLoadingMode ? 1 : 30;
+            std::this_thread::sleep_for(std::chrono::milliseconds(idleSleepMs));
+        }
     }
 }
 
@@ -3815,7 +3820,8 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
     int centerCZ = (int)std::floor(cameraPos.z / CHUNK_SIZE_Z);
     static glm::ivec2 lastRequestedCenter(std::numeric_limits<int>::min(), std::numeric_limits<int>::min());
 
-    integratePendingChunkData(2);
+    const int integrateBudget = fastChunkLoadingMode ? 24 : 2;
+    integratePendingChunkData(integrateBudget);
 
     if (!loadedChunks.empty() && lastRequestedCenter.x == centerCX && lastRequestedCenter.y == centerCZ) {
         return;
@@ -4378,6 +4384,7 @@ void startNewGame() {
     playerPlaced = false;
     loadingTimer = 0.0f;
     isLoadingGame = false;
+    fastChunkLoadingMode = true;
 
     resetPlayerStateForNewWorld();
     fs::create_directories(getCurrentChunksPath());
@@ -4407,6 +4414,7 @@ void loadGame() {
     playerPlaced = false;
     loadingTimer = 0.0f;
     isLoadingGame = true;
+    fastChunkLoadingMode = true;
     initWorldNoise();
     workerThread = std::thread(workerFunction);
     updateChunksAroundCamera(cameraPos, true);
@@ -4444,6 +4452,7 @@ void exitToMenu(GLFWwindow* window, int& sw, int& sh) {
     }
     lastChunkForMesh = nullptr;
     lastChunkCoordsForMesh = glm::ivec2(0,0);
+    fastChunkLoadingMode = false;
     workerRunning = false;
     if (workerThread.joinable()) workerThread.join();
     workerRunning = true;
@@ -5055,13 +5064,14 @@ void updateGame(GLFWwindow* window, float deltaTime) {
     if (currentState == GameState::LOADING_GAME) {
         loadingTimer += deltaTime;
         updateChunksAroundCamera(cameraPos, isLoadingGame);
-        buildChunkMeshesNearCamera(8); // быстрее строим меши во время загрузки
+        buildChunkMeshesNearCamera(24); // максимальная скорость во время загрузки мира
         if (areChunksReady()) {
             if (!playerPlaced) {
                 placePlayerOnGround();
                 playerPlaced = true;
             }
             movementEnabled = true;
+            fastChunkLoadingMode = false;
             currentState = GameState::IN_GAME;
         }
         updateMusic();
@@ -5279,14 +5289,17 @@ void updateGameplayCamera() {
     gameplayRayDir = cameraFront;
     renderCameraPos = cameraPos;
     if (cameraMode == CameraMode::ThirdPersonBack) {
-        glm::vec3 flatForward(cameraFront.x, 0.0f, cameraFront.z);
-        if (glm::length(flatForward) < 0.001f) {
-            flatForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        // Центр третьего лица — голова/глаза игрока, как в Minecraft.
+        glm::vec3 headCenter = feetPos + glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
+
+        glm::vec3 lookDir = cameraFront;
+        if (glm::length(lookDir) < 0.001f) {
+            lookDir = glm::vec3(0.0f, 0.0f, -1.0f);
         } else {
-            flatForward = glm::normalize(flatForward);
+            lookDir = glm::normalize(lookDir);
         }
-        glm::vec3 back = flatForward;
-        renderCameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT + 0.2f, 0.0f) - back * thirdPersonDistance;
+
+        renderCameraPos = headCenter - lookDir * thirdPersonDistance;
     }
 }
 

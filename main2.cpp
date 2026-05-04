@@ -5337,7 +5337,8 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
     glm::vec3 flatLook(lookDir.x, 0.0f, lookDir.z);
     if (glm::length(flatLook) > 0.001f) {
         flatLook = glm::normalize(flatLook);
-        bodyYaw = std::atan2(flatLook.x, flatLook.z);
+        // Модель собрана с базовым "вперёд" вдоль -Z, поэтому инвертируем XZ при переводе взгляда в yaw.
+        bodyYaw = std::atan2(-flatLook.x, -flatLook.z);
     }
     if (!playerVAO) return;
 

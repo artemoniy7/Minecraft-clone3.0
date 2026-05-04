@@ -6007,9 +6007,11 @@ void main() {
     vec4 color = texture(ourTexture, uv); if (u_isWater==1) color.a = 0.7;
     if (u_isRain==1) {
         float rainMask = max(color.r, max(color.g, color.b));
-        float rainAlpha = pow(clamp(rainMask, 0.0, 1.0), 1.45) * 0.78;
-        if (rainAlpha < 0.04) discard;
-        color = vec4(vec3(0.86, 0.90, 1.0), rainAlpha);
+        float sourceAlpha = (color.a > 0.01) ? color.a : rainMask;
+        float rainAlpha = pow(clamp(sourceAlpha, 0.0, 1.0), 1.35) * 0.82;
+        if (rainAlpha < 0.035) discard;
+        // Сохраняем исходный оттенок rain.png (в т.ч. синий), а не перекрашиваем в серый.
+        color = vec4(color.rgb, rainAlpha);
     }
     vec3 n = normalize(Normal);
     float vertexLight = clamp(LightLevel, 0.0, 1.0);

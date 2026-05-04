@@ -5345,15 +5345,12 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
     (void)currentTime;
     static float bodyYaw = 0.0f;
 
-    glm::vec3 horizontalMove(playerVelocity.x, 0.0f, playerVelocity.z);
-    if (glm::length(horizontalMove) > 0.001f) {
-        horizontalMove = glm::normalize(horizontalMove);
-        // Поворачиваем тело именно в сторону движения (world-space), а не в сторону камеры.
+    glm::vec3 flatLook(lookDir.x, 0.0f, lookDir.z);
+    if (glm::length(flatLook) > 0.001f) {
+        flatLook = glm::normalize(flatLook);
+        // Тело в 3-м лице всегда смотрит туда же, куда направлена камера.
         // Модель собрана с базовым "вперёд" вдоль -Z, поэтому инвертируем XZ при переводе в yaw.
-        bodyYaw = std::atan2(-horizontalMove.x, -horizontalMove.z);
-    } else {
-        // Если стоим на месте, оставляем последнюю ориентацию тела без рывков.
-        (void)lookDir;
+        bodyYaw = std::atan2(-flatLook.x, -flatLook.z);
     }
     if (!playerVAO) return;
 

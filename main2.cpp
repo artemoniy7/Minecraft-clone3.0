@@ -5345,22 +5345,10 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
     (void)currentTime;
     static float bodyYaw = 0.0f;
 
-    // Используем горизонтальную скорость для поворота тела при движении
-    glm::vec3 horizontalMove(playerVelocity.x, 0.0f, playerVelocity.z);
-    
-    if (glm::length(horizontalMove) > 0.1f) {
-        // Движемся - поворачиваем тело в направлении движения
-        horizontalMove = glm::normalize(horizontalMove);
-        bodyYaw = std::atan2(-horizontalMove.x, horizontalMove.z);
-    } else {
-        // Стоим на месте - поворачиваем тело в направлении взгляда
-        glm::vec3 flatLook(lookDir.x, 0.0f, lookDir.z);
-        if (glm::length(flatLook) > 0.001f) {
-            flatLook = glm::normalize(flatLook);
-            bodyYaw = std::atan2(flatLook.x, flatLook.z);
-        }
-    }
-    
+    (void)lookDir;
+    // Используем только yaw камеры: это исключает любые влияния коллизий/скольжения/диагональных входов.
+    // При yaw = -90° (вперёд по -Z) тело имеет нулевой разворот модели.
+    bodyYaw = glm::radians(yaw + 90.0f);
     if (!playerVAO) return;
 
     auto pushFace = [](std::vector<float>& verts, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n,
@@ -5378,7 +5366,6 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
 
     struct UVRect { float u0, v0, u1, v1; };
     
-    // УБРАН МИНУС ПЕРЕД bodyYaw
     auto rotateAroundFeetY = [&](const glm::vec3& p) {
         float s = std::sin(bodyYaw);
         float c = std::cos(bodyYaw);
@@ -5386,7 +5373,6 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
         return feetPos + glm::vec3(rel.x * c - rel.z * s, rel.y, rel.x * s + rel.z * c);
     };
 
-    // УБРАН МИНУС ПЕРЕД bodyYaw
     auto rotateNormalY = [&](const glm::vec3& n) {
         float s = std::sin(bodyYaw);
         float c = std::cos(bodyYaw);

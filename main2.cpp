@@ -5289,14 +5289,17 @@ void updateGameplayCamera() {
     gameplayRayDir = cameraFront;
     renderCameraPos = cameraPos;
     if (cameraMode == CameraMode::ThirdPersonBack) {
-        glm::vec3 flatForward(cameraFront.x, 0.0f, cameraFront.z);
-        if (glm::length(flatForward) < 0.001f) {
-            flatForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        // Центр третьего лица — голова/глаза игрока, как в Minecraft.
+        glm::vec3 headCenter = feetPos + glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
+
+        glm::vec3 lookDir = cameraFront;
+        if (glm::length(lookDir) < 0.001f) {
+            lookDir = glm::vec3(0.0f, 0.0f, -1.0f);
         } else {
-            flatForward = glm::normalize(flatForward);
+            lookDir = glm::normalize(lookDir);
         }
-        glm::vec3 back = flatForward;
-        renderCameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT + 0.2f, 0.0f) - back * thirdPersonDistance;
+
+        renderCameraPos = headCenter - lookDir * thirdPersonDistance;
     }
 }
 

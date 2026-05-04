@@ -156,6 +156,7 @@ void initPlayerRenderer();
 void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float currentTime);
 void updateGameplayCamera();
 void renderCloudLayer(float currentTime);
+void renderRainLayer(float currentTime);
 void addFaceToVertices(std::vector<float>& verts, 
     glm::vec3 v1, glm::vec3 v2, glm::vec3 v3, glm::vec3 v4,
     glm::vec3 normal, float uOffset);
@@ -1511,6 +1512,8 @@ void workerFunction() {
 // ----------------------------------------------------------------------
 unsigned int shaderProgram, reticleProgram, reticleVAO;
 unsigned int cloudTexture = 0, cloudVAO = 0, cloudVBO = 0;
+unsigned int rainTexture = 0, rainVAO = 0, rainVBO = 0;
+bool isRaining = false;
 int u_time_location, u_isWater_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location;
 
 struct Chunk;
@@ -5153,6 +5156,13 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     if (currentState != GameState::IN_GAME && !inventoryOpen) return;
     if (!movementEnabled) return;
 
+    static bool pWasPressed = false;
+    bool pPressed = glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS;
+    if (pPressed && !pWasPressed) {
+        isRaining = !isRaining;
+    }
+    pWasPressed = pPressed;
+
     // Определяем состояние воды
     glm::vec3 feetPosCheck = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     bool feetInWater = getBlockAt(floor(feetPosCheck.x), floor(feetPosCheck.y + 0.1f), floor(feetPosCheck.z)) == 5;
@@ -5484,6 +5494,11 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glm::vec3 sunDir, skyColor;
     float sunIntensity, ambientBase;
     evaluateDayNightCycle(currentTime, sunDir, sunIntensity, ambientBase, skyColor);
+    if (isRaining) {
+        skyColor = glm::mix(skyColor, glm::vec3(0.40f, 0.42f, 0.45f), 0.72f);
+        sunIntensity *= 0.62f;
+        ambientBase *= 0.78f;
+    }
 
     glClearColor(skyColor.r, skyColor.g, skyColor.b, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -5517,6 +5532,7 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glUniform1f(u_sunIntensity_location, sunIntensity);
     glUniform1f(u_ambientBase_location, ambientBase);
     renderCloudLayer(currentTime);
+    renderRainLayer(currentTime);
 
     // Рендер всех чанков
     for (auto& p : loadedChunks)
@@ -5575,6 +5591,7 @@ void renderGame(int screenW, int screenH, float currentTime) {
 
 void initCloudLayer() {
     cloudTexture = loadTextureStrip("textures/environment/clouds.png", true);
+    rainTexture = loadTextureStrip("textures/environment/rain.png", true);
 
     const float y = 120.0f;
     const float halfSize = 2048.0f;
@@ -5599,6 +5616,9 @@ void initCloudLayer() {
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(8 * sizeof(float))); glEnableVertexAttribArray(3);
     glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(9 * sizeof(float))); glEnableVertexAttribArray(4);
     glBindVertexArray(0);
+
+    glGenVertexArrays(1, &rainVAO);
+    glGenBuffers(1, &rainVBO);
 }
 
 void renderCloudLayer(float currentTime) {
@@ -5616,6 +5636,63 @@ void renderCloudLayer(float currentTime) {
     glDisable(GL_BLEND);
     glBindVertexArray(0);
     glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, glm::value_ptr(glm::mat4(1.0f)));
+}
+
+void renderRainLayer(float currentTime) {
+    if (!isRaining || !rainTexture || !rainVAO || !rainVBO) return;
+
+    const float radius = 16.0f;
+    const float heightTop = 14.0f;
+    const float heightBottom = -2.0f;
+
+    std::vector<float> v;
+    v.reserve(64 * 6 * 10);
+
+    glm::vec3 camFlat(renderCameraPos.x, 0.0f, renderCameraPos.z);
+    glm::vec3 right = glm::normalize(glm::vec3(cameraFront.z, 0.0f, -cameraFront.x));
+    if (glm::length(right) < 0.001f) right = glm::vec3(1,0,0);
+
+    int minX = (int)std::floor(camFlat.x - radius);
+    int maxX = (int)std::ceil(camFlat.x + radius);
+    int minZ = (int)std::floor(camFlat.z - radius);
+    int maxZ = (int)std::ceil(camFlat.z + radius);
+
+    float vScroll = std::fmod(currentTime * 1.8f, 1.0f);
+    for (int x = minX; x <= maxX; x += 2) {
+        for (int z = minZ; z <= maxZ; z += 2) {
+            float fx = x + 0.5f;
+            float fz = z + 0.5f;
+            glm::vec3 center(fx, cameraPos.y, fz);
+            glm::vec3 half = right * 0.20f;
+            glm::vec3 a = center - half + glm::vec3(0,heightTop,0);
+            glm::vec3 b = center + half + glm::vec3(0,heightTop,0);
+            glm::vec3 c = center + half + glm::vec3(0,heightBottom,0);
+            glm::vec3 d = center - half + glm::vec3(0,heightBottom,0);
+            float quad[] = {
+                a.x,a.y,a.z,0,0+vScroll,0,0,1,1,0.85f, b.x,b.y,b.z,1,0+vScroll,0,0,1,1,0.85f, c.x,c.y,c.z,1,1+vScroll,0,0,1,1,0.85f,
+                c.x,c.y,c.z,1,1+vScroll,0,0,1,1,0.85f, d.x,d.y,d.z,0,1+vScroll,0,0,1,1,0.85f, a.x,a.y,a.z,0,0+vScroll,0,0,1,1,0.85f
+            };
+            v.insert(v.end(), std::begin(quad), std::end(quad));
+        }
+    }
+
+    glBindVertexArray(rainVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, rainVBO);
+    glBufferData(GL_ARRAY_BUFFER, v.size()*sizeof(float), v.data(), GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(3*sizeof(float))); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(5*sizeof(float))); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
+
+    glBindTexture(GL_TEXTURE_2D, rainTexture);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size()/10));
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glBindVertexArray(0);
 }
 
 void updatePauseMenu(GLFWwindow* window) {
@@ -6149,6 +6226,9 @@ int main() {
     if (cloudTexture) glDeleteTextures(1, &cloudTexture);
     if (cloudVAO) glDeleteVertexArrays(1, &cloudVAO);
     if (cloudVBO) glDeleteBuffers(1, &cloudVBO);
+    if (rainTexture) glDeleteTextures(1, &rainTexture);
+    if (rainVAO) glDeleteVertexArrays(1, &rainVAO);
+    if (rainVBO) glDeleteBuffers(1, &rainVBO);
     glDeleteProgram(shaderProgram);
     glDeleteVertexArrays(1, &reticleVAO);
     glDeleteProgram(reticleProgram);

@@ -5659,49 +5659,72 @@ void renderCloudLayer(float currentTime) {
 void renderRainLayer(float currentTime) {
     if (!isRaining || !rainTexture || !rainVAO || !rainVBO) return;
 
-    const float radius = 14.0f;
-    const float heightTop = 10.0f;
-    const float heightBottom = -4.0f;
+    const float rainRadius = 30.0f;
+    const float gridSize = 1.0f;
+    const float dropWidth = 0.032f;
+    const float dropLength = 1.0f;
+    const float rainTopOffset = 44.0f;
+    const float rainBottomOffset = -2.0f;
+    const float fallSpeed = 15.0f;
+    const float windX = 0.18f;
+    const float windZ = -0.09f;
+
+    const float baseX = std::floor(renderCameraPos.x / gridSize) * gridSize;
+    const float baseZ = std::floor(renderCameraPos.z / gridSize) * gridSize;
+    const int cellRadius = static_cast<int>(std::ceil(rainRadius / gridSize));
 
     std::vector<float> v;
-    v.reserve(2048 * 6 * 10);
+    v.reserve(4096 * 6 * 10);
 
-    glm::vec3 camFlat(renderCameraPos.x, 0.0f, renderCameraPos.z);
-    glm::vec3 right = glm::normalize(glm::vec3(cameraFront.z, 0.0f, -cameraFront.x));
-    if (glm::length(right) < 0.001f) right = glm::vec3(1,0,0);
-    glm::vec3 forwardFlat = glm::normalize(glm::vec3(cameraFront.x, 0.0f, cameraFront.z));
-    if (glm::length(forwardFlat) < 0.001f) forwardFlat = glm::vec3(0,0,-1);
+    const float rainTop = renderCameraPos.y + rainTopOffset;
+    const float rainBottom = renderCameraPos.y + rainBottomOffset;
+    const float heightRange = std::max(1.0f, rainTop - rainBottom);
 
-    int minX = (int)std::floor(camFlat.x - radius);
-    int maxX = (int)std::ceil(camFlat.x + radius);
-    int minZ = (int)std::floor(camFlat.z - radius);
-    int maxZ = (int)std::ceil(camFlat.z + radius);
-
-    float vScroll = std::fmod(-currentTime * 2.8f, 1.0f);
-    if (vScroll < 0.0f) vScroll += 1.0f;
-    auto appendRainQuad = [&](const glm::vec3& center, const glm::vec3& axis, float uvShift) {
-        glm::vec3 half = axis * 0.30f;
-        glm::vec3 a = center - half + glm::vec3(0,heightTop,0);
-        glm::vec3 b = center + half + glm::vec3(0,heightTop,0);
-        glm::vec3 c = center + half + glm::vec3(0,heightBottom,0);
-        glm::vec3 d = center - half + glm::vec3(0,heightBottom,0);
+    auto appendDropQuad = [&](const glm::vec3& center, float length, float width, float alpha) {
+        glm::vec3 halfX(width * 0.5f, 0.0f, 0.0f);
+        glm::vec3 top(0.0f, length * 0.5f, 0.0f);
+        glm::vec3 bottom(0.0f, -length * 0.5f, 0.0f);
+        glm::vec3 a = center - halfX + top;
+        glm::vec3 b = center + halfX + top;
+        glm::vec3 c = center + halfX + bottom;
+        glm::vec3 d = center - halfX + bottom;
         float quad[] = {
-            a.x,a.y,a.z,0,0+uvShift,0,0,1,1,0.9f, b.x,b.y,b.z,1,0+uvShift,0,0,1,1,0.9f, c.x,c.y,c.z,1,1+uvShift,0,0,1,1,0.9f,
-            c.x,c.y,c.z,1,1+uvShift,0,0,1,1,0.9f, d.x,d.y,d.z,0,1+uvShift,0,0,1,1,0.9f, a.x,a.y,a.z,0,0+uvShift,0,0,1,1,0.9f
+            a.x,a.y,a.z,0,0,0,0,1,1,alpha, b.x,b.y,b.z,1,0,0,0,1,1,alpha, c.x,c.y,c.z,1,1,0,0,1,1,alpha,
+            c.x,c.y,c.z,1,1,0,0,1,1,alpha, d.x,d.y,d.z,0,1,0,0,1,1,alpha, a.x,a.y,a.z,0,0,0,0,1,1,alpha
         };
         v.insert(v.end(), std::begin(quad), std::end(quad));
     };
 
-    for (int x = minX; x <= maxX; ++x) {
-        for (int z = minZ; z <= maxZ; ++z) {
-            uint32_t h = static_cast<uint32_t>((x * 73856093) ^ (z * 19349663));
-            if ((h % 100) > 78) continue;
-            float jitterX = ((h & 0xF) / 15.0f - 0.5f) * 0.5f;
-            float jitterZ = (((h >> 4) & 0xF) / 15.0f - 0.5f) * 0.5f;
-            glm::vec3 center(x + 0.5f + jitterX, cameraPos.y, z + 0.5f + jitterZ);
-            float uvShift = std::fmod(vScroll + (h & 31) / 31.0f, 1.0f);
-            appendRainQuad(center, right, uvShift);
-            appendRainQuad(center, forwardFlat, uvShift);
+    for (int gx = -cellRadius; gx <= cellRadius; ++gx) {
+        for (int gz = -cellRadius; gz <= cellRadius; ++gz) {
+            float worldX = baseX + gx * gridSize;
+            float worldZ = baseZ + gz * gridSize;
+            float dx = worldX - renderCameraPos.x;
+            float dz = worldZ - renderCameraPos.z;
+            if ((dx * dx + dz * dz) > (rainRadius * rainRadius)) continue;
+
+            const int ix = static_cast<int>(std::floor(worldX));
+            const int iz = static_cast<int>(std::floor(worldZ));
+            uint32_t h = static_cast<uint32_t>((ix * 73856093) ^ (iz * 19349663));
+            if ((h % 100) > 68) continue;
+
+            float jitterX = ((h & 0x3FF) / 1023.0f - 0.5f) * gridSize;
+            float jitterZ = (((h >> 10) & 0x3FF) / 1023.0f - 0.5f) * gridSize;
+            float phase = ((h >> 20) & 0xFFF) / 4095.0f;
+            float fall = std::fmod(currentTime * fallSpeed + phase * heightRange, heightRange);
+            float fallProgress = fall / heightRange;
+            float y = rainTop - fall;
+
+            float width = dropWidth + (((h >> 5) & 0xFF) / 255.0f) * 0.018f;
+            float length = dropLength + (((h >> 13) & 0xFF) / 255.0f) * 0.55f;
+            float alpha = 0.34f + (((h >> 23) & 0xFF) / 255.0f) * 0.20f;
+
+            glm::vec3 center(worldX + 0.5f * gridSize + jitterX, y, worldZ + 0.5f * gridSize + jitterZ);
+            center.x += windX * fallProgress;
+            center.z += windZ * fallProgress;
+
+            if (center.y + length * 0.5f < rainBottom) continue;
+            appendDropQuad(center, length, width, alpha);
         }
     }
 
@@ -6008,10 +6031,10 @@ void main() {
     if (u_isRain==1) {
         float rainMask = max(color.r, max(color.g, color.b));
         float sourceAlpha = (color.a > 0.01) ? color.a : rainMask;
-        float rainAlpha = pow(clamp(sourceAlpha, 0.0, 1.0), 1.35) * 0.82;
+        float rainAlpha = pow(clamp(sourceAlpha, 0.0, 1.0), 1.15) * 0.62;
         if (rainAlpha < 0.035) discard;
-        // Сохраняем исходный оттенок rain.png (в т.ч. синий), а не перекрашиваем в серый.
-        color = vec4(color.rgb, rainAlpha);
+        vec3 rainTint = vec3(0.78, 0.80, 0.82);
+        color = vec4(rainTint, rainAlpha);
     }
     vec3 n = normalize(Normal);
     float vertexLight = clamp(LightLevel, 0.0, 1.0);

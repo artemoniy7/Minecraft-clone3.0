@@ -5348,7 +5348,7 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
     (void)lookDir;
     // Используем только yaw камеры: это исключает любые влияния коллизий/скольжения/диагональных входов.
     // При yaw = -90° (вперёд по -Z) тело имеет нулевой разворот модели.
-    bodyYaw = glm::radians(yaw + 90.0f);
+    bodyYaw = glm::radians(yaw + 270.0f);
     if (!playerVAO) return;
 
     int sampleX = static_cast<int>(std::floor(feetPos.x));

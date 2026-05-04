@@ -5237,6 +5237,17 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     
     glm::vec3 feetPos = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     glm::vec3 actualDelta = applyCollision(feetPos, delta);
+
+    // Сохраняем фактическое горизонтальное движение за кадр,
+    // чтобы рендер модели корректно знал направление движения тела.
+    if (deltaTime > 0.00001f) {
+        playerVelocity.x = actualDelta.x / deltaTime;
+        playerVelocity.z = actualDelta.z / deltaTime;
+    } else {
+        playerVelocity.x = 0.0f;
+        playerVelocity.z = 0.0f;
+    }
+
     feetPos += actualDelta;
     cameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     

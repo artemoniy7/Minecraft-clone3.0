@@ -6005,7 +6005,12 @@ void main() {
         uv.y = uv.y / frames + floor(frame) / frames;
     }
     vec4 color = texture(ourTexture, uv); if (u_isWater==1) color.a = 0.7;
-    if (u_isRain==1) color = vec4(vec3(0.92, 0.94, 1.0), color.a);
+    if (u_isRain==1) {
+        float rainMask = max(color.r, max(color.g, color.b));
+        float rainAlpha = pow(clamp(rainMask, 0.0, 1.0), 1.45) * 0.78;
+        if (rainAlpha < 0.04) discard;
+        color = vec4(vec3(0.86, 0.90, 1.0), rainAlpha);
+    }
     vec3 n = normalize(Normal);
     float vertexLight = clamp(LightLevel, 0.0, 1.0);
     float blockLightOnly = clamp(BlockLightLevel, 0.0, 1.0);

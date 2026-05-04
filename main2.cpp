@@ -156,6 +156,7 @@ void initPlayerRenderer();
 void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float currentTime);
 void updateGameplayCamera();
 void renderCloudLayer(float currentTime);
+void renderRainLayer(float currentTime);
 void addFaceToVertices(std::vector<float>& verts, 
     glm::vec3 v1, glm::vec3 v2, glm::vec3 v3, glm::vec3 v4,
     glm::vec3 normal, float uOffset);
@@ -1469,6 +1470,7 @@ std::unordered_map<glm::ivec2, std::shared_ptr<ChunkData>, hash_ivec2> pendingDa
 std::unordered_set<glm::ivec2, hash_ivec2> pendingLoad;
 std::unordered_set<glm::ivec2, hash_ivec2> pendingGen;
 std::atomic<bool> workerRunning(true);
+std::atomic<bool> fastChunkLoadingMode(false);
 std::thread workerThread;
 
 void workerFunction() {
@@ -1488,7 +1490,8 @@ void workerFunction() {
         }
         {
             std::unique_lock<std::mutex> lock(chunkMutex);
-            while (!pendingGen.empty() && processed < 20) {
+            const int maxProcessedPerTick = fastChunkLoadingMode ? 64 : 20;
+            while (!pendingGen.empty() && processed < maxProcessedPerTick) {
                 glm::ivec2 pos = *pendingGen.begin(); pendingGen.erase(pos);
                 lock.unlock();
                 auto data = generateChunk(pos.x, pos.y);
@@ -1497,7 +1500,10 @@ void workerFunction() {
                 processed++;
             }
         }
-        if (processed == 0) std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        if (processed == 0) {
+            const int idleSleepMs = fastChunkLoadingMode ? 1 : 30;
+            std::this_thread::sleep_for(std::chrono::milliseconds(idleSleepMs));
+        }
     }
 }
 
@@ -1506,6 +1512,8 @@ void workerFunction() {
 // ----------------------------------------------------------------------
 unsigned int shaderProgram, reticleProgram, reticleVAO;
 unsigned int cloudTexture = 0, cloudVAO = 0, cloudVBO = 0;
+unsigned int rainTexture = 0, rainVAO = 0, rainVBO = 0;
+bool isRaining = false;
 int u_time_location, u_isWater_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location;
 
 struct Chunk;
@@ -3815,7 +3823,8 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
     int centerCZ = (int)std::floor(cameraPos.z / CHUNK_SIZE_Z);
     static glm::ivec2 lastRequestedCenter(std::numeric_limits<int>::min(), std::numeric_limits<int>::min());
 
-    integratePendingChunkData(2);
+    const int integrateBudget = fastChunkLoadingMode ? 24 : 2;
+    integratePendingChunkData(integrateBudget);
 
     if (!loadedChunks.empty() && lastRequestedCenter.x == centerCX && lastRequestedCenter.y == centerCZ) {
         return;
@@ -4378,6 +4387,7 @@ void startNewGame() {
     playerPlaced = false;
     loadingTimer = 0.0f;
     isLoadingGame = false;
+    fastChunkLoadingMode = true;
 
     resetPlayerStateForNewWorld();
     fs::create_directories(getCurrentChunksPath());
@@ -4407,6 +4417,7 @@ void loadGame() {
     playerPlaced = false;
     loadingTimer = 0.0f;
     isLoadingGame = true;
+    fastChunkLoadingMode = true;
     initWorldNoise();
     workerThread = std::thread(workerFunction);
     updateChunksAroundCamera(cameraPos, true);
@@ -4444,6 +4455,7 @@ void exitToMenu(GLFWwindow* window, int& sw, int& sh) {
     }
     lastChunkForMesh = nullptr;
     lastChunkCoordsForMesh = glm::ivec2(0,0);
+    fastChunkLoadingMode = false;
     workerRunning = false;
     if (workerThread.joinable()) workerThread.join();
     workerRunning = true;
@@ -5055,13 +5067,14 @@ void updateGame(GLFWwindow* window, float deltaTime) {
     if (currentState == GameState::LOADING_GAME) {
         loadingTimer += deltaTime;
         updateChunksAroundCamera(cameraPos, isLoadingGame);
-        buildChunkMeshesNearCamera(8); // быстрее строим меши во время загрузки
+        buildChunkMeshesNearCamera(24); // максимальная скорость во время загрузки мира
         if (areChunksReady()) {
             if (!playerPlaced) {
                 placePlayerOnGround();
                 playerPlaced = true;
             }
             movementEnabled = true;
+            fastChunkLoadingMode = false;
             currentState = GameState::IN_GAME;
         }
         updateMusic();
@@ -5142,6 +5155,13 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     const bool inventoryOpen = (currentState == GameState::CREATIVE_INVENTORY);
     if (currentState != GameState::IN_GAME && !inventoryOpen) return;
     if (!movementEnabled) return;
+
+    static bool pWasPressed = false;
+    bool pPressed = glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS;
+    if (pPressed && !pWasPressed) {
+        isRaining = !isRaining;
+    }
+    pWasPressed = pPressed;
 
     // Определяем состояние воды
     glm::vec3 feetPosCheck = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
@@ -5227,6 +5247,17 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     
     glm::vec3 feetPos = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     glm::vec3 actualDelta = applyCollision(feetPos, delta);
+
+    // Сохраняем фактическое горизонтальное движение за кадр,
+    // чтобы рендер модели корректно знал направление движения тела.
+    if (deltaTime > 0.00001f) {
+        playerVelocity.x = actualDelta.x / deltaTime;
+        playerVelocity.z = actualDelta.z / deltaTime;
+    } else {
+        playerVelocity.x = 0.0f;
+        playerVelocity.z = 0.0f;
+    }
+
     feetPos += actualDelta;
     cameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     
@@ -5279,14 +5310,17 @@ void updateGameplayCamera() {
     gameplayRayDir = cameraFront;
     renderCameraPos = cameraPos;
     if (cameraMode == CameraMode::ThirdPersonBack) {
-        glm::vec3 flatForward(cameraFront.x, 0.0f, cameraFront.z);
-        if (glm::length(flatForward) < 0.001f) {
-            flatForward = glm::vec3(0.0f, 0.0f, -1.0f);
+        // Центр третьего лица — голова/глаза игрока, как в Minecraft.
+        glm::vec3 headCenter = feetPos + glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
+
+        glm::vec3 lookDir = cameraFront;
+        if (glm::length(lookDir) < 0.001f) {
+            lookDir = glm::vec3(0.0f, 0.0f, -1.0f);
         } else {
-            flatForward = glm::normalize(flatForward);
+            lookDir = glm::normalize(lookDir);
         }
-        glm::vec3 back = flatForward;
-        renderCameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT + 0.2f, 0.0f) - back * thirdPersonDistance;
+
+        renderCameraPos = headCenter - lookDir * thirdPersonDistance;
     }
 }
 
@@ -5318,25 +5352,55 @@ void initPlayerRenderer() {
 }
 
 void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float currentTime) {
-    (void)lookDir;
     (void)currentTime;
+    static float bodyYaw = 0.0f;
+
+    (void)lookDir;
+    // Используем только yaw камеры: это исключает любые влияния коллизий/скольжения/диагональных входов.
+    // При yaw = -90° (вперёд по -Z) тело имеет нулевой разворот модели.
+    bodyYaw = glm::radians(yaw + 270.0f);
     if (!playerVAO) return;
 
-    auto pushFace = [](std::vector<float>& verts, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n,
+    int sampleX = static_cast<int>(std::floor(feetPos.x));
+    int sampleZ = static_cast<int>(std::floor(feetPos.z));
+    int sampleYFeet = static_cast<int>(std::floor(feetPos.y + 0.2f));
+    int sampleYBody = static_cast<int>(std::floor(feetPos.y + 1.0f));
+    int sampleYHead = static_cast<int>(std::floor(feetPos.y + 1.6f));
+    uint8_t localBlockLight = std::max({
+        getBlockLightAt(sampleX, sampleYFeet, sampleZ),
+        getBlockLightAt(sampleX, sampleYBody, sampleZ),
+        getBlockLightAt(sampleX, sampleYHead, sampleZ)
+    });
+    float playerBlockLight = static_cast<float>(localBlockLight) / static_cast<float>(MAX_LIGHT);
+
+    auto pushFace = [&](std::vector<float>& verts, glm::vec3 a, glm::vec3 b, glm::vec3 c, glm::vec3 d, glm::vec3 n,
                        float u0, float v0, float u1, float v1) {
         float face[] = {
-            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,0,   // Исправлено: v1 вместо v0
-            b.x,b.y,b.z,u1,v1,n.x,n.y,n.z,1,0,
-            c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,0,
-            c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,0,
-            d.x,d.y,d.z,u0,v0,n.x,n.y,n.z,1,0,
-            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,0
+            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,playerBlockLight,   // Исправлено: v1 вместо v0
+            b.x,b.y,b.z,u1,v1,n.x,n.y,n.z,1,playerBlockLight,
+            c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,playerBlockLight,
+            c.x,c.y,c.z,u1,v0,n.x,n.y,n.z,1,playerBlockLight,
+            d.x,d.y,d.z,u0,v0,n.x,n.y,n.z,1,playerBlockLight,
+            a.x,a.y,a.z,u0,v1,n.x,n.y,n.z,1,playerBlockLight
         };
         verts.insert(verts.end(), std::begin(face), std::end(face));
     };
 
     struct UVRect { float u0, v0, u1, v1; };
     
+    auto rotateAroundFeetY = [&](const glm::vec3& p) {
+        float s = std::sin(bodyYaw);
+        float c = std::cos(bodyYaw);
+        glm::vec3 rel = p - feetPos;
+        return feetPos + glm::vec3(rel.x * c - rel.z * s, rel.y, rel.x * s + rel.z * c);
+    };
+
+    auto rotateNormalY = [&](const glm::vec3& n) {
+        float s = std::sin(bodyYaw);
+        float c = std::cos(bodyYaw);
+        return glm::vec3(n.x * c - n.z * s, n.y, n.x * s + n.z * c);
+    };
+
     auto drawBox = [&](glm::vec3 center, glm::vec3 size, unsigned int tex, const std::array<UVRect, 6>& uv) {
         float x0 = center.x - size.x * 0.5f;
         float x1 = center.x + size.x * 0.5f;
@@ -5345,22 +5409,31 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
         float z0 = center.z - size.z * 0.5f;
         float z1 = center.z + size.z * 0.5f;
         
+        glm::vec3 p000 = rotateAroundFeetY({x0,y0,z0});
+        glm::vec3 p001 = rotateAroundFeetY({x0,y0,z1});
+        glm::vec3 p010 = rotateAroundFeetY({x0,y1,z0});
+        glm::vec3 p011 = rotateAroundFeetY({x0,y1,z1});
+        glm::vec3 p100 = rotateAroundFeetY({x1,y0,z0});
+        glm::vec3 p101 = rotateAroundFeetY({x1,y0,z1});
+        glm::vec3 p110 = rotateAroundFeetY({x1,y1,z0});
+        glm::vec3 p111 = rotateAroundFeetY({x1,y1,z1});
+
         std::vector<float> v;
         v.reserve(36 * 10);
         
         // Порядок граней: ЛЕВАЯ, ПЕРЕДНЯЯ, ПРАВАЯ, ЗАДНЯЯ, ВЕРХНЯЯ, НИЖНЯЯ
         // Левая грань (X-)
-        pushFace(v, {x0,y0,z0}, {x0,y0,z1}, {x0,y1,z1}, {x0,y1,z0}, {-1,0,0}, uv[0].u0, uv[0].v0, uv[0].u1, uv[0].v1);
+        pushFace(v, p000, p001, p011, p010, rotateNormalY({-1,0,0}), uv[0].u0, uv[0].v0, uv[0].u1, uv[0].v1);
         // Передняя грань (Z+)
-        pushFace(v, {x1,y0,z1}, {x0,y0,z1}, {x0,y1,z1}, {x1,y1,z1}, {0,0,1}, uv[1].u0, uv[1].v0, uv[1].u1, uv[1].v1);
+        pushFace(v, p101, p001, p011, p111, rotateNormalY({0,0,1}), uv[1].u0, uv[1].v0, uv[1].u1, uv[1].v1);
         // Правая грань (X+)
-        pushFace(v, {x1,y0,z1}, {x1,y0,z0}, {x1,y1,z0}, {x1,y1,z1}, {1,0,0}, uv[2].u0, uv[2].v0, uv[2].u1, uv[2].v1);
+        pushFace(v, p101, p100, p110, p111, rotateNormalY({1,0,0}), uv[2].u0, uv[2].v0, uv[2].u1, uv[2].v1);
         // Задняя грань (Z-)
-        pushFace(v, {x0,y0,z0}, {x1,y0,z0}, {x1,y1,z0}, {x0,y1,z0}, {0,0,-1}, uv[3].u0, uv[3].v0, uv[3].u1, uv[3].v1);
+        pushFace(v, p000, p100, p110, p010, rotateNormalY({0,0,-1}), uv[3].u0, uv[3].v0, uv[3].u1, uv[3].v1);
         // Верхняя грань (Y+)
-        pushFace(v, {x0,y1,z1}, {x1,y1,z1}, {x1,y1,z0}, {x0,y1,z0}, {0,1,0}, uv[4].u0, uv[4].v0, uv[4].u1, uv[4].v1);
+        pushFace(v, p011, p111, p110, p010, rotateNormalY({0,1,0}), uv[4].u0, uv[4].v0, uv[4].u1, uv[4].v1);
         // Нижняя грань (Y-)
-        pushFace(v, {x1,y0,z1}, {x0,y0,z1}, {x0,y0,z0}, {x1,y0,z0}, {0,-1,0}, uv[5].u0, uv[5].v0, uv[5].u1, uv[5].v1);
+        pushFace(v, p101, p001, p000, p100, rotateNormalY({0,-1,0}), uv[5].u0, uv[5].v0, uv[5].u1, uv[5].v1);
         
         glBindTexture(GL_TEXTURE_2D, tex);
         glBindVertexArray(playerVAO);
@@ -5434,6 +5507,11 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glm::vec3 sunDir, skyColor;
     float sunIntensity, ambientBase;
     evaluateDayNightCycle(currentTime, sunDir, sunIntensity, ambientBase, skyColor);
+    if (isRaining) {
+        skyColor = glm::mix(skyColor, glm::vec3(0.40f, 0.42f, 0.45f), 0.72f);
+        sunIntensity *= 0.62f;
+        ambientBase *= 0.78f;
+    }
 
     glClearColor(skyColor.r, skyColor.g, skyColor.b, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -5467,6 +5545,7 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glUniform1f(u_sunIntensity_location, sunIntensity);
     glUniform1f(u_ambientBase_location, ambientBase);
     renderCloudLayer(currentTime);
+    renderRainLayer(currentTime);
 
     // Рендер всех чанков
     for (auto& p : loadedChunks)
@@ -5525,6 +5604,7 @@ void renderGame(int screenW, int screenH, float currentTime) {
 
 void initCloudLayer() {
     cloudTexture = loadTextureStrip("textures/environment/clouds.png", true);
+    rainTexture = loadTextureStrip("textures/environment/rain.png", true);
 
     const float y = 120.0f;
     const float halfSize = 2048.0f;
@@ -5549,6 +5629,9 @@ void initCloudLayer() {
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(8 * sizeof(float))); glEnableVertexAttribArray(3);
     glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(9 * sizeof(float))); glEnableVertexAttribArray(4);
     glBindVertexArray(0);
+
+    glGenVertexArrays(1, &rainVAO);
+    glGenBuffers(1, &rainVBO);
 }
 
 void renderCloudLayer(float currentTime) {
@@ -5566,6 +5649,63 @@ void renderCloudLayer(float currentTime) {
     glDisable(GL_BLEND);
     glBindVertexArray(0);
     glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, glm::value_ptr(glm::mat4(1.0f)));
+}
+
+void renderRainLayer(float currentTime) {
+    if (!isRaining || !rainTexture || !rainVAO || !rainVBO) return;
+
+    const float radius = 16.0f;
+    const float heightTop = 14.0f;
+    const float heightBottom = -2.0f;
+
+    std::vector<float> v;
+    v.reserve(64 * 6 * 10);
+
+    glm::vec3 camFlat(renderCameraPos.x, 0.0f, renderCameraPos.z);
+    glm::vec3 right = glm::normalize(glm::vec3(cameraFront.z, 0.0f, -cameraFront.x));
+    if (glm::length(right) < 0.001f) right = glm::vec3(1,0,0);
+
+    int minX = (int)std::floor(camFlat.x - radius);
+    int maxX = (int)std::ceil(camFlat.x + radius);
+    int minZ = (int)std::floor(camFlat.z - radius);
+    int maxZ = (int)std::ceil(camFlat.z + radius);
+
+    float vScroll = std::fmod(currentTime * 1.8f, 1.0f);
+    for (int x = minX; x <= maxX; x += 2) {
+        for (int z = minZ; z <= maxZ; z += 2) {
+            float fx = x + 0.5f;
+            float fz = z + 0.5f;
+            glm::vec3 center(fx, cameraPos.y, fz);
+            glm::vec3 half = right * 0.20f;
+            glm::vec3 a = center - half + glm::vec3(0,heightTop,0);
+            glm::vec3 b = center + half + glm::vec3(0,heightTop,0);
+            glm::vec3 c = center + half + glm::vec3(0,heightBottom,0);
+            glm::vec3 d = center - half + glm::vec3(0,heightBottom,0);
+            float quad[] = {
+                a.x,a.y,a.z,0,0+vScroll,0,0,1,1,0.85f, b.x,b.y,b.z,1,0+vScroll,0,0,1,1,0.85f, c.x,c.y,c.z,1,1+vScroll,0,0,1,1,0.85f,
+                c.x,c.y,c.z,1,1+vScroll,0,0,1,1,0.85f, d.x,d.y,d.z,0,1+vScroll,0,0,1,1,0.85f, a.x,a.y,a.z,0,0+vScroll,0,0,1,1,0.85f
+            };
+            v.insert(v.end(), std::begin(quad), std::end(quad));
+        }
+    }
+
+    glBindVertexArray(rainVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, rainVBO);
+    glBufferData(GL_ARRAY_BUFFER, v.size()*sizeof(float), v.data(), GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(3*sizeof(float))); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(5*sizeof(float))); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
+
+    glBindTexture(GL_TEXTURE_2D, rainTexture);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size()/10));
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+    glBindVertexArray(0);
 }
 
 void updatePauseMenu(GLFWwindow* window) {
@@ -6099,6 +6239,9 @@ int main() {
     if (cloudTexture) glDeleteTextures(1, &cloudTexture);
     if (cloudVAO) glDeleteVertexArrays(1, &cloudVAO);
     if (cloudVBO) glDeleteBuffers(1, &cloudVBO);
+    if (rainTexture) glDeleteTextures(1, &rainTexture);
+    if (rainVAO) glDeleteVertexArrays(1, &rainVAO);
+    if (rainVBO) glDeleteBuffers(1, &rainVBO);
     glDeleteProgram(shaderProgram);
     glDeleteVertexArrays(1, &reticleVAO);
     glDeleteProgram(reticleProgram);

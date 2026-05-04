@@ -1514,7 +1514,7 @@ unsigned int shaderProgram, reticleProgram, reticleVAO;
 unsigned int cloudTexture = 0, cloudVAO = 0, cloudVBO = 0;
 unsigned int rainTexture = 0, rainVAO = 0, rainVBO = 0;
 bool isRaining = false;
-int u_time_location, u_isWater_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location;
+int u_time_location, u_isWater_location, u_isRain_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location;
 
 struct Chunk;
 std::unordered_map<glm::ivec2, Chunk, hash_ivec2> loadedChunks;
@@ -5535,6 +5535,7 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glUniform3fv(u_sunDir_location, 1, glm::value_ptr(sunDir));
     glUniform1f(u_sunIntensity_location, sunIntensity);
     glUniform1f(u_ambientBase_location, ambientBase);
+    glUniform1i(u_isRain_location, 0);
     renderCloudLayer(currentTime);
     renderRainLayer(currentTime);
 
@@ -5702,6 +5703,7 @@ void renderRainLayer(float currentTime) {
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
     glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
 
+    glUniform1i(u_isRain_location, 1);
     glBindTexture(GL_TEXTURE_2D, rainTexture);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -5709,6 +5711,7 @@ void renderRainLayer(float currentTime) {
     glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(v.size()/10));
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
+    glUniform1i(u_isRain_location, 0);
     glBindVertexArray(0);
 }
 
@@ -5980,7 +5983,7 @@ void main() {
 const char *fragmentShaderSource = R"(
 #version 330 core
 in vec2 TexCoord; out vec4 FragColor;
-uniform sampler2D ourTexture; uniform float u_time; uniform int u_isWater;
+uniform sampler2D ourTexture; uniform float u_time; uniform int u_isWater; uniform int u_isRain;
 uniform vec3 u_sunDir; uniform float u_sunIntensity; uniform float u_ambientBase;
 in vec3 FragPos; in vec3 Normal; in float LightLevel; in float BlockLightLevel;
 void main() {
@@ -5991,6 +5994,7 @@ void main() {
         uv.y = uv.y / frames + floor(frame) / frames;
     }
     vec4 color = texture(ourTexture, uv); if (u_isWater==1) color.a = 0.7;
+    if (u_isRain==1) color = vec4(vec3(0.78), color.a);
     vec3 n = normalize(Normal);
     float vertexLight = clamp(LightLevel, 0.0, 1.0);
     float blockLightOnly = clamp(BlockLightLevel, 0.0, 1.0);
@@ -6077,6 +6081,7 @@ int main() {
     glUniform1i(glGetUniformLocation(shaderProgram,"ourTexture"),0);
     u_time_location = glGetUniformLocation(shaderProgram,"u_time");
     u_isWater_location = glGetUniformLocation(shaderProgram,"u_isWater");
+    u_isRain_location = glGetUniformLocation(shaderProgram,"u_isRain");
     u_sunDir_location = glGetUniformLocation(shaderProgram,"u_sunDir");
     u_sunIntensity_location = glGetUniformLocation(shaderProgram,"u_sunIntensity");
     u_ambientBase_location = glGetUniformLocation(shaderProgram,"u_ambientBase");

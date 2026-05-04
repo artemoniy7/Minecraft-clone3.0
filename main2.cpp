@@ -5334,13 +5334,10 @@ void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float
     (void)currentTime;
     static float bodyYaw = 0.0f;
 
-    const bool isMoving = glm::length(glm::vec2(playerVelocity.x, playerVelocity.z)) > 0.05f;
-    if (isMoving) {
-        glm::vec3 flatLook(lookDir.x, 0.0f, lookDir.z);
-        if (glm::length(flatLook) > 0.001f) {
-            flatLook = glm::normalize(flatLook);
-            bodyYaw = std::atan2(flatLook.x, flatLook.z);
-        }
+    glm::vec3 flatLook(lookDir.x, 0.0f, lookDir.z);
+    if (glm::length(flatLook) > 0.001f) {
+        flatLook = glm::normalize(flatLook);
+        bodyYaw = std::atan2(flatLook.x, flatLook.z);
     }
     if (!playerVAO) return;
 

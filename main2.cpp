@@ -1191,7 +1191,7 @@ float getHeightAt(int wx, int wz, float& outBiomeTemp, float& outBiomeHumid, flo
 
     float continent = continentNoise.GetNoise((float)wx, (float)wz);
     float seaNoise = seaLevelNoise.GetNoise((float)wx, (float)wz);
-    outWaterLevel = 62.0f + seaNoise * 8.0f;
+    outWaterLevel = 62.0f + seaNoise;
     outWaterLevel = glm::clamp(outWaterLevel, 45.0f, 75.0f);
 
     float t = (continent + 1.0f) * 0.5f;
@@ -3095,9 +3095,9 @@ void drawHUD(int screenW, int screenH, float currentTime)
             std::string countStr = std::to_string(playerInventoryItems[invIdx].count);
             drawMinecraftText(
                 countStr,
-                slotX + SLOT_SIZE - measureMinecraftTextWidth(countStr, 1.5f) - 6,
-                slotY + SLOT_SIZE - 12,
-                1.5f, screenW, screenH,
+                slotX + SLOT_SIZE - measureMinecraftTextWidth(countStr, 1.5f) - 14,
+                slotY + SLOT_SIZE - 25,
+                2.4f, screenW, screenH,
                 glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
         }
     }
@@ -3120,9 +3120,9 @@ void drawHUD(int screenW, int screenH, float currentTime)
         std::string countStr = std::to_string(playerInventoryItems[invIdx].count);
         drawMinecraftText(
             countStr,
-            slotX + SLOT_SIZE - measureMinecraftTextWidth(countStr, 1.5f) - 6,
-            slotY + SLOT_SIZE - 12,
-            1.5f, screenW, screenH,
+            slotX + SLOT_SIZE - measureMinecraftTextWidth(countStr, 1.5f) - 19,
+            slotY + SLOT_SIZE - 25,
+            2.4f, screenW, screenH,
             glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
     }
 
@@ -5706,11 +5706,13 @@ void renderRainLayer(float currentTime) {
             const int ix = static_cast<int>(std::floor(worldX));
             const int iz = static_cast<int>(std::floor(worldZ));
             uint32_t h = static_cast<uint32_t>((ix * 73856093) ^ (iz * 19349663));
+            float dist2 = dx * dx + dz * dz;
+            bool forceInnerRain = dist2 < 100.0f; // Гарантируем дождь в зоне игрока (~10 блоков).
             float densityBias = 68.0f;
-            if (dx * dx + dz * dz < 64.0f) densityBias = 92.0f; // Гуще в радиусе ~8 блоков от игрока.
-            if ((h % 100) > densityBias) continue;
+            if (dist2 < 64.0f) densityBias = 92.0f; // Гуще в радиусе ~8 блоков от игрока.
+            if (!forceInnerRain && (h % 100) > densityBias) continue;
 
-            int dropCount = (dx * dx + dz * dz < 16.0f) ? 2 : 1; // Доп. капля совсем рядом с игроком.
+            int dropCount = (dist2 < 16.0f) ? 2 : 1; // Доп. капля совсем рядом с игроком.
             for (int i = 0; i < dropCount; ++i) {
                 uint32_t hi = h ^ static_cast<uint32_t>(i * 0x9e3779b9u);
                 float jitterX = ((hi & 0x3FF) / 1023.0f - 0.5f) * gridSize;

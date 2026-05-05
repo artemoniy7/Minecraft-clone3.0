@@ -5669,8 +5669,8 @@ void renderRainLayer(float currentTime) {
     const float windX = 0.18f;
     const float windZ = -0.09f;
 
-    const float baseX = std::floor(renderCameraPos.x / gridSize) * gridSize;
-    const float baseZ = std::floor(renderCameraPos.z / gridSize) * gridSize;
+    const float baseX = std::round(renderCameraPos.x / gridSize) * gridSize;
+    const float baseZ = std::round(renderCameraPos.z / gridSize) * gridSize;
     const int cellRadius = static_cast<int>(std::ceil(rainRadius / gridSize));
 
     std::vector<float> v;
@@ -5729,7 +5729,7 @@ void renderRainLayer(float currentTime) {
                     float fallProgress = layeredFall / heightRange;
                     float y = rainTop - layeredFall;
 
-                    glm::vec3 center(worldX + 0.5f * gridSize + jitterX, y, worldZ + 0.5f * gridSize + jitterZ);
+                    glm::vec3 center(worldX + jitterX, y, worldZ + jitterZ);
                     center.x += windX * fallProgress;
                     center.z += windZ * fallProgress;
 

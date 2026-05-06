@@ -3672,10 +3672,11 @@ struct Chunk {
             glBindVertexArray(vao[type]); glDrawArrays(GL_TRIANGLES, 0, vertexCount[type]);
         }
     }
-    void renderAlphaBlocks() {
+    void renderAlphaBlocks(bool drawSameTypeFacesPass) {
         if (!data || !meshReady) return;
         for (int type=0; type<256; ++type) {
             if (type==5 || !vao[type] || !isAlphaBlock(type)) continue;
+            if (blockDrawsSameAlphaFaces[type] != drawSameTypeFacesPass) continue;
             auto it = blockTypes.find(type); if (it==blockTypes.end()) continue;
             glUniform1i(u_isWater_location, 0);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, it->second.textureID);
@@ -5587,6 +5588,11 @@ void renderGame(int screenW, int screenH, float currentTime) {
     for (auto& p : loadedChunks)
         p.second.render();
 
+    // Листва и другие code-alpha блоки — cutout: рисуем с записью в depth-buffer.
+    // Так вода/дальние блоки не просвечивают и не накладываются поверх ближней листвы.
+    for (auto& p : loadedChunks)
+        p.second.renderAlphaBlocks(true);
+
     std::vector<Chunk*> alphaChunks;
     alphaChunks.reserve(loadedChunks.size());
     for (auto& p : loadedChunks) {
@@ -5601,7 +5607,7 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
     for (Chunk* ch : alphaChunks)
-        ch->renderAlphaBlocks();
+        ch->renderAlphaBlocks(false);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 

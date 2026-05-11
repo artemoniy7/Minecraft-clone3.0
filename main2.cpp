@@ -1537,8 +1537,11 @@ int u_time_location, u_isWater_location, u_isRain_location, u_sunDir_location, u
 struct Chunk;
 std::unordered_map<glm::ivec2, Chunk, hash_ivec2> loadedChunks;
 static glm::vec3 lastCameraPosForWaterSort(0.0f);
+static glm::vec3 lastCameraPosForAlphaSort(0.0f);
 static std::vector<Chunk*> waterChunksCache;
+static std::vector<Chunk*> alphaChunksCache;
 static bool waterChunksCacheValid = false;
+static bool alphaChunksCacheValid = false;
 static Chunk* lastChunkForMesh = nullptr;
 static glm::ivec2 lastChunkCoordsForMesh(0,0);
 
@@ -3281,6 +3284,7 @@ struct Chunk {
     unsigned int vao[256] = {0}, vbo[256] = {0};
     size_t vertexCount[256] = {0};
     bool meshReady = false, dirty = false;
+    bool hasCutoutAlpha = false, hasBlendedAlpha = false;
 
     Chunk(int cx, int cz, bool loadFromFile) : pos(cx, cz) {
         std::lock_guard<std::mutex> lock(chunkMutex);
@@ -3516,6 +3520,8 @@ struct Chunk {
 
     void buildMesh() {
         if (!data) return;
+        hasCutoutAlpha = false;
+        hasBlendedAlpha = false;
         for (int i=0; i<256; ++i) if (vao[i]) { glDeleteVertexArrays(1, &vao[i]); glDeleteBuffers(1, &vbo[i]); vao[i]=vbo[i]=0; vertexCount[i]=0; }
         std::unordered_map<int, std::vector<float>> verticesPerType;
         const float leftFace[] = { -0.5f,-0.5f,-0.5f, -0.5f,-0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,-0.5f, -0.5f,-0.5f,-0.5f };
@@ -3659,8 +3665,14 @@ struct Chunk {
             glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
             glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
             vertexCount[type] = verts.size() / 10;
+            if (isAlphaBlock(type)) {
+                if (blockDrawsSameAlphaFaces[type]) hasCutoutAlpha = true;
+                else hasBlendedAlpha = true;
+            }
         }
         meshReady = true;
+        alphaChunksCacheValid = false;
+        waterChunksCacheValid = false;
     }
 
     void render() {
@@ -3888,6 +3900,7 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
         }
         if (changed) {
             waterChunksCacheValid = false;
+            alphaChunksCacheValid = false;
             lastChunkForMesh = nullptr;  // ДОБАВЬТЕ ЭТУ СТРОКУ
         }
 }
@@ -3898,7 +3911,8 @@ void buildChunkMeshesNearCamera(int maxPerFrame) {
         Chunk* chunk;
     };
 
-    std::vector<Candidate> candidates;
+    static std::vector<Candidate> candidates;
+    candidates.clear();
     candidates.reserve(loadedChunks.size());
 
     int built = 0;
@@ -3912,9 +3926,11 @@ void buildChunkMeshesNearCamera(int maxPerFrame) {
         candidates.push_back({dx * dx + dz * dz, &chunk});
     }
 
-    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
-        return a.dist2 < b.dist2;
-    });
+    if (candidates.size() > 1) {
+        std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+            return a.dist2 < b.dist2;
+        });
+    }
 
     for (const Candidate& candidate : candidates) {
         if (built >= maxPerFrame) break;
@@ -3946,6 +3962,19 @@ void updateWaterChunksCache() {
     waterChunksCache.clear();
     for (auto& pair : loadedChunks) if (pair.second.vao[5]) waterChunksCache.push_back(&pair.second);
     waterChunksCacheValid = true;
+}
+
+void updateAlphaChunksCache() {
+    if (alphaChunksCacheValid) return;
+    alphaChunksCache.clear();
+    alphaChunksCache.reserve(loadedChunks.size());
+    for (auto& pair : loadedChunks) {
+        if (pair.second.meshReady && (pair.second.hasCutoutAlpha || pair.second.hasBlendedAlpha)) {
+            alphaChunksCache.push_back(&pair.second);
+        }
+    }
+    lastCameraPosForAlphaSort = glm::vec3(std::numeric_limits<float>::infinity());
+    alphaChunksCacheValid = true;
 }
 void saveAllChunks() {
     saveCurrentWorldMetadata();
@@ -5127,7 +5156,7 @@ void updateGame(GLFWwindow* window, float deltaTime) {
     } 
     else if (currentState == GameState::IN_GAME) {
         updateChunksAroundCamera(cameraPos, isLoadingGame);
-        buildChunkMeshesNearCamera(2);
+        buildChunkMeshesNearCamera(1);
         processInputInGame(window, deltaTime);
         updateMusic();
         updateMood(deltaTime);
@@ -5136,7 +5165,7 @@ void updateGame(GLFWwindow* window, float deltaTime) {
         // В инвентаре мир продолжает обновляться (чанки, музыка, настроение)
         // Но игрок не двигается (движение отключено в processInputInGame)
         updateChunksAroundCamera(cameraPos, isLoadingGame);
-        buildChunkMeshesNearCamera(2);
+        buildChunkMeshesNearCamera(1);
         processInputInGame(window, deltaTime);
         updateMusic();
         updateMood(deltaTime);
@@ -5594,23 +5623,22 @@ void renderGame(int screenW, int screenH, float currentTime) {
 
     // Листва и другие code-alpha блоки — cutout: рисуем с записью в depth-buffer.
     // Так вода/дальние блоки не просвечивают и не накладываются поверх ближней листвы.
-    for (auto& p : loadedChunks)
-        p.second.renderAlphaBlocks(true);
+    updateAlphaChunksCache();
+    for (Chunk* ch : alphaChunksCache)
+        ch->renderAlphaBlocks(true);
 
-    std::vector<Chunk*> alphaChunks;
-    alphaChunks.reserve(loadedChunks.size());
-    for (auto& p : loadedChunks) {
-        if (p.second.meshReady) alphaChunks.push_back(&p.second);
+    if (glm::distance(safeRenderCameraPos, lastCameraPosForAlphaSort) > 0.75f) {
+        std::sort(alphaChunksCache.begin(), alphaChunksCache.end(), [&](Chunk* a, Chunk* b) {
+            glm::vec3 ca(a->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, a->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
+            glm::vec3 cb(b->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, b->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
+            return glm::distance(safeRenderCameraPos, ca) > glm::distance(safeRenderCameraPos, cb);
+        });
+        lastCameraPosForAlphaSort = safeRenderCameraPos;
     }
-    std::sort(alphaChunks.begin(), alphaChunks.end(), [&](Chunk* a, Chunk* b) {
-        glm::vec3 ca(a->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, a->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
-        glm::vec3 cb(b->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, b->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
-        return glm::distance(safeRenderCameraPos, ca) > glm::distance(safeRenderCameraPos, cb);
-    });
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
-    for (Chunk* ch : alphaChunks)
+    for (Chunk* ch : alphaChunksCache)
         ch->renderAlphaBlocks(false);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);

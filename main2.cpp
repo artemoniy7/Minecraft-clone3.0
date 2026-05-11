@@ -173,7 +173,7 @@ void addFaceToVertices(std::vector<float>& verts,
         {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
         {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
         {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
-        {1, 64}, {2, 64}, {3, 64}, {4, 64}, {5, 8}, {6, 64}, {7, 64}, {8, 32}, {9, 16}
+        {1, 64}, {2, 64}, {3, 64}, {4, 64}, {5, 8}, {6, 64}, {7, 64}, {8, 32}, {12, 16}
     };
 void drawDimOverlay(int screenW, int screenH, float alpha);
 void renderInventory(int screenW, int screenH);
@@ -5337,14 +5337,17 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
 
     // Выбор слота хотбара
     if (!inventoryOpen) {
-        for (int i = 0; i < 9; ++i)
-            if (glfwGetKey(window, GLFW_KEY_1 + i) == GLFW_PRESS)
+        for (int i = 0; i < 9; ++i) {
+            if (glfwGetKey(window, GLFW_KEY_1 + i) == GLFW_PRESS) {
                 currentHotbarSlot = i;
-        if (glfwGetKey(window, GLFW_KEY_9) == GLFW_PRESS)
-            currentBlockType = 9;
-        for (int i = 1; i <= 9; ++i)
-            if (glfwGetKey(window, GLFW_KEY_0 + i) == GLFW_PRESS && blockTypes.count(i))
-                currentBlockType = i;
+                // Синхронизируем currentBlockType с выбранным слотом хотбара
+                int blockFromHotbar = playerInventoryItems[27 + currentHotbarSlot].blockType;
+                if (blockFromHotbar != 0) {
+                    currentBlockType = blockFromHotbar;
+                }
+            }
+        }
+        // Удалите старый код с KEY_9 и KEY_0+i, так как теперь всё идёт через хотбар
     }
 }
 

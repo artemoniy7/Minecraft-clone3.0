@@ -3628,10 +3628,11 @@ struct Chunk {
                 bool currentAlpha = isAlphaBlock(type);
                 bool neighborAlpha = isAlphaBlock(neighbor);
                 if (currentAlpha) {
-                    // Листва/похожие code-overridden alpha-блоки могут рисовать грань даже рядом
-                    // с таким же блоком; стекло по умолчанию скрывает внутренние грани между собой.
+                    // Одинаковые alpha-блоки используют свой режим: листва рисует внутренние грани,
+                    // стекло скрывает их. Разные alpha-блоки (например листва рядом со стеклом)
+                    // должны видеть грани друг друга, иначе часть текстуры пропадает.
                     if (neighbor == type) return blockDrawsSameAlphaFaces[type];
-                    return !neighborAlpha;
+                    return true;
                 }
 
                 // Твёрдый блок должен быть виден за стеклом/листвой, поэтому его грань

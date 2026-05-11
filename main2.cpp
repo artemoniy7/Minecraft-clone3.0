@@ -112,6 +112,8 @@ const float MAX_FALL_DAMAGE_HEIGHT = 23.0f; // Высота, с которой �
 // Таблица твёрдости блоков и светимости
 // ----------------------------------------------------------------------
 bool isSolidBlockFast[256] = {false};
+bool blockHasAlpha[256] = {false};
+bool blockDrawsSameAlphaFaces[256] = {false};
 int blockLightEmission[256] = {0};
 int blockOpacity[256] = {0};
 int maxBlockLightRadius = 0;
@@ -367,9 +369,19 @@ struct BlockType {
     std::string name;
     unsigned int textureID;
     int lightEmission = 0;
+    bool transparent = false;
     int textureParts = 3;  // Количество частей в текстурной полосе (3, 4 или 6)
 };
 std::unordered_map<int, BlockType> blockTypes;
+
+// Alpha-блоки, заданные прямо в коде, имеют приоритет над blocks.json.
+// Такие блоки пропускают свет и рисуют грань даже рядом с таким же блоком (подходит для листвы).
+// Если id не указан здесь, transparent берётся из blocks.json и ведёт себя как стекло:
+// свет проходит, но внутренние грани между одинаковыми alpha-блоками скрываются.
+const std::unordered_set<int> codeAlphaBlocks = {
+    7 // oak_leaves
+};
+
 int currentBlockType = 1;
 
 struct ItemType {
@@ -854,19 +866,25 @@ void initWorldNoise() {
 // ----------------------------------------------------------------------
 const int MAX_LIGHT = 15;
 
-// Проверка, является ли блок НЕПРОЗРАЧНЫМ (полностью блокирует свет)
+inline bool isAlphaBlock(int blockId) {
+    return blockId >= 0 && blockId < 256 && blockHasAlpha[blockId];
+}
+
+// Проверка, является ли блок НЕПРОЗРАЧНЫМ (полностью блокирует свет).
+// Блоки с alpha-текстурой (стекло, листва и т.п.) пропускают свет как в Minecraft.
 bool isOpaque(int blockId) {
     if (blockId == 0) return false;  // воздух
     if (blockId == 5) return false;  // вода
-    if (blockId == 7) return false;  // листва
+    if (isAlphaBlock(blockId)) return false;
     return true;
 }
 
-// Ослабление света при прохождении через блок
+// Ослабление света при прохождении через блок.
+// Alpha-блоки не являются воздухом, но свет через них проходит с минимальной потерей.
 int getLightOpacity(int blockId) {
     if (blockId == 0) return 0;
     if (blockId == 5) return 1;
-    if (blockId == 7) return 1;
+    if (isAlphaBlock(blockId)) return 1;
     return MAX_LIGHT + 1;  // твёрдые блоки полностью блокируют
 }
 
@@ -1519,8 +1537,11 @@ int u_time_location, u_isWater_location, u_isRain_location, u_sunDir_location, u
 struct Chunk;
 std::unordered_map<glm::ivec2, Chunk, hash_ivec2> loadedChunks;
 static glm::vec3 lastCameraPosForWaterSort(0.0f);
+static glm::vec3 lastCameraPosForAlphaSort(0.0f);
 static std::vector<Chunk*> waterChunksCache;
+static std::vector<Chunk*> alphaChunksCache;
 static bool waterChunksCacheValid = false;
+static bool alphaChunksCacheValid = false;
 static Chunk* lastChunkForMesh = nullptr;
 static glm::ivec2 lastChunkCoordsForMesh(0,0);
 
@@ -3263,6 +3284,7 @@ struct Chunk {
     unsigned int vao[256] = {0}, vbo[256] = {0};
     size_t vertexCount[256] = {0};
     bool meshReady = false, dirty = false;
+    bool hasCutoutAlpha = false, hasBlendedAlpha = false;
 
     Chunk(int cx, int cz, bool loadFromFile) : pos(cx, cz) {
         std::lock_guard<std::mutex> lock(chunkMutex);
@@ -3498,6 +3520,8 @@ struct Chunk {
 
     void buildMesh() {
         if (!data) return;
+        hasCutoutAlpha = false;
+        hasBlendedAlpha = false;
         for (int i=0; i<256; ++i) if (vao[i]) { glDeleteVertexArrays(1, &vao[i]); glDeleteBuffers(1, &vbo[i]); vao[i]=vbo[i]=0; vertexCount[i]=0; }
         std::unordered_map<int, std::vector<float>> verticesPerType;
         const float leftFace[] = { -0.5f,-0.5f,-0.5f, -0.5f,-0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,-0.5f, -0.5f,-0.5f,-0.5f };
@@ -3602,23 +3626,33 @@ struct Chunk {
             };
             
             std::vector<float>& verts = verticesPerType[type];
+            auto shouldRenderFace = [&](int neighbor) {
+                if (neighbor == BLOCK_UNKNOWN) return false;
+                if (type == 5) return neighbor != 5 && !isOpaque(neighbor);
+                if (neighbor == 0 || neighbor == 5) return true;
+
+                bool currentAlpha = isAlphaBlock(type);
+                bool neighborAlpha = isAlphaBlock(neighbor);
+                if (currentAlpha) {
+                    // Одинаковые alpha-блоки используют свой режим: листва рисует внутренние грани,
+                    // стекло скрывает их. Разные alpha-блоки (например листва рядом со стеклом)
+                    // должны видеть грани друг друга, иначе часть текстуры пропадает.
+                    if (neighbor == type) return blockDrawsSameAlphaFaces[type];
+                    return true;
+                }
+
+                // Твёрдый блок должен быть виден за стеклом/листвой, поэтому его грань
+                // рисуется рядом с alpha-блоком, но не рядом с другим твёрдым блоком.
+                return neighborAlpha;
+            };
+
             int neighbor;
-            if (type==5) {
-                neighbor=getBlockAtForMesh(ox-1,oy,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(leftFace,0,verts);
-                neighbor=getBlockAtForMesh(ox+1,oy,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(rightFace,1,verts);
-                neighbor=getBlockAtForMesh(ox,oy,oz+1); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(frontFace,4,verts);
-                neighbor=getBlockAtForMesh(ox,oy,oz-1); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(backFace,5,verts);
-                neighbor=getBlockAtForMesh(ox,oy+1,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(topFace,3,verts);
-                neighbor=getBlockAtForMesh(ox,oy-1,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN&&!isOpaque(neighbor)) addFace(bottomFace,2,verts);
-            }
-            else {
-                neighbor=getBlockAtForMesh(ox-1,oy,oz); if(neighbor==0||neighbor==5) addFace(leftFace,0,verts);
-                neighbor=getBlockAtForMesh(ox+1,oy,oz); if(neighbor==0||neighbor==5) addFace(rightFace,1,verts);
-                neighbor=getBlockAtForMesh(ox,oy,oz+1); if(neighbor==0||neighbor==5) addFace(frontFace,4,verts);
-                neighbor=getBlockAtForMesh(ox,oy,oz-1); if(neighbor==0||neighbor==5) addFace(backFace,5,verts);
-                neighbor=getBlockAtForMesh(ox,oy+1,oz); if(neighbor==0||neighbor==5) addFace(topFace,3,verts);
-                neighbor=getBlockAtForMesh(ox,oy-1,oz); if(neighbor==0||neighbor==5) addFace(bottomFace,2,verts);
-            }
+            neighbor=getBlockAtForMesh(ox-1,oy,oz); if(shouldRenderFace(neighbor)) addFace(leftFace,0,verts);
+            neighbor=getBlockAtForMesh(ox+1,oy,oz); if(shouldRenderFace(neighbor)) addFace(rightFace,1,verts);
+            neighbor=getBlockAtForMesh(ox,oy,oz+1); if(shouldRenderFace(neighbor)) addFace(frontFace,4,verts);
+            neighbor=getBlockAtForMesh(ox,oy,oz-1); if(shouldRenderFace(neighbor)) addFace(backFace,5,verts);
+            neighbor=getBlockAtForMesh(ox,oy+1,oz); if(shouldRenderFace(neighbor)) addFace(topFace,3,verts);
+            neighbor=getBlockAtForMesh(ox,oy-1,oz); if(shouldRenderFace(neighbor)) addFace(bottomFace,2,verts);
         }
         for (auto& [type, verts] : verticesPerType) {
             if (verts.empty()) continue;
@@ -3631,14 +3665,31 @@ struct Chunk {
             glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
             glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
             vertexCount[type] = verts.size() / 10;
+            if (isAlphaBlock(type)) {
+                if (blockDrawsSameAlphaFaces[type]) hasCutoutAlpha = true;
+                else hasBlendedAlpha = true;
+            }
         }
         meshReady = true;
+        alphaChunksCacheValid = false;
+        waterChunksCacheValid = false;
     }
 
     void render() {
         if (!data || !meshReady) return;
         for (int type=0; type<256; ++type) {
-            if (type==5 || !vao[type]) continue;
+            if (type==5 || !vao[type] || isAlphaBlock(type)) continue;
+            auto it = blockTypes.find(type); if (it==blockTypes.end()) continue;
+            glUniform1i(u_isWater_location, 0);
+            glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, it->second.textureID);
+            glBindVertexArray(vao[type]); glDrawArrays(GL_TRIANGLES, 0, vertexCount[type]);
+        }
+    }
+    void renderAlphaBlocks(bool drawSameTypeFacesPass) {
+        if (!data || !meshReady) return;
+        for (int type=0; type<256; ++type) {
+            if (type==5 || !vao[type] || !isAlphaBlock(type)) continue;
+            if (blockDrawsSameAlphaFaces[type] != drawSameTypeFacesPass) continue;
             auto it = blockTypes.find(type); if (it==blockTypes.end()) continue;
             glUniform1i(u_isWater_location, 0);
             glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, it->second.textureID);
@@ -3849,6 +3900,7 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
         }
         if (changed) {
             waterChunksCacheValid = false;
+            alphaChunksCacheValid = false;
             lastChunkForMesh = nullptr;  // ДОБАВЬТЕ ЭТУ СТРОКУ
         }
 }
@@ -3859,7 +3911,8 @@ void buildChunkMeshesNearCamera(int maxPerFrame) {
         Chunk* chunk;
     };
 
-    std::vector<Candidate> candidates;
+    static std::vector<Candidate> candidates;
+    candidates.clear();
     candidates.reserve(loadedChunks.size());
 
     int built = 0;
@@ -3873,9 +3926,11 @@ void buildChunkMeshesNearCamera(int maxPerFrame) {
         candidates.push_back({dx * dx + dz * dz, &chunk});
     }
 
-    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
-        return a.dist2 < b.dist2;
-    });
+    if (candidates.size() > 1) {
+        std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+            return a.dist2 < b.dist2;
+        });
+    }
 
     for (const Candidate& candidate : candidates) {
         if (built >= maxPerFrame) break;
@@ -3908,6 +3963,19 @@ void updateWaterChunksCache() {
     for (auto& pair : loadedChunks) if (pair.second.vao[5]) waterChunksCache.push_back(&pair.second);
     waterChunksCacheValid = true;
 }
+
+void updateAlphaChunksCache() {
+    if (alphaChunksCacheValid) return;
+    alphaChunksCache.clear();
+    alphaChunksCache.reserve(loadedChunks.size());
+    for (auto& pair : loadedChunks) {
+        if (pair.second.meshReady && (pair.second.hasCutoutAlpha || pair.second.hasBlendedAlpha)) {
+            alphaChunksCache.push_back(&pair.second);
+        }
+    }
+    lastCameraPosForAlphaSort = glm::vec3(std::numeric_limits<float>::infinity());
+    alphaChunksCacheValid = true;
+}
 void saveAllChunks() {
     saveCurrentWorldMetadata();
     for (auto& p : loadedChunks) {
@@ -3939,12 +4007,19 @@ bool loadBlockConfig(const std::string& path) {
         bt.id = item["id"];
         bt.name = item["name"];
         std::string texPath = item["texture_strip"];
-        bt.textureID = loadTextureStrip(texPath.c_str(), bt.id==5);
+        bt.transparent = item.value("transparent", false);
+        bool codeAlpha = codeAlphaBlocks.find(bt.id) != codeAlphaBlocks.end();
+        if (codeAlpha) {
+            bt.transparent = true;
+        }
+        bt.textureID = loadTextureStrip(texPath.c_str(), bt.id == 5 || bt.transparent);
         bt.lightEmission = item.value("light", 0);
         bt.textureParts = item.value("texture_parts", 3);  // По умолчанию 3 части
         
         blockTypes[bt.id] = bt;
         isSolidBlockFast[bt.id] = (bt.id!=0 && bt.id!=5);
+        blockHasAlpha[bt.id] = (bt.id != 5 && bt.transparent);
+        blockDrawsSameAlphaFaces[bt.id] = codeAlpha;
         blockLightEmission[bt.id] = bt.lightEmission;
         maxBlockLightRadius = std::max(maxBlockLightRadius, bt.lightEmission);
         blockOpacity[bt.id] = getLightOpacity(bt.id);
@@ -5081,7 +5156,7 @@ void updateGame(GLFWwindow* window, float deltaTime) {
     } 
     else if (currentState == GameState::IN_GAME) {
         updateChunksAroundCamera(cameraPos, isLoadingGame);
-        buildChunkMeshesNearCamera(2);
+        buildChunkMeshesNearCamera(1);
         processInputInGame(window, deltaTime);
         updateMusic();
         updateMood(deltaTime);
@@ -5090,7 +5165,7 @@ void updateGame(GLFWwindow* window, float deltaTime) {
         // В инвентаре мир продолжает обновляться (чанки, музыка, настроение)
         // Но игрок не двигается (движение отключено в processInputInGame)
         updateChunksAroundCamera(cameraPos, isLoadingGame);
-        buildChunkMeshesNearCamera(2);
+        buildChunkMeshesNearCamera(1);
         processInputInGame(window, deltaTime);
         updateMusic();
         updateMood(deltaTime);
@@ -5542,6 +5617,28 @@ void renderGame(int screenW, int screenH, float currentTime) {
     // Рендер всех чанков
     for (auto& p : loadedChunks)
         p.second.render();
+
+    // Листва и другие code-alpha блоки — cutout: рисуем с записью в depth-buffer.
+    // Так вода/дальние блоки не просвечивают и не накладываются поверх ближней листвы.
+    updateAlphaChunksCache();
+    for (Chunk* ch : alphaChunksCache)
+        ch->renderAlphaBlocks(true);
+
+    if (glm::distance(safeRenderCameraPos, lastCameraPosForAlphaSort) > 0.75f) {
+        std::sort(alphaChunksCache.begin(), alphaChunksCache.end(), [&](Chunk* a, Chunk* b) {
+            glm::vec3 ca(a->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, a->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
+            glm::vec3 cb(b->pos.x * CHUNK_SIZE_X + CHUNK_SIZE_X / 2, 30, b->pos.y * CHUNK_SIZE_Z + CHUNK_SIZE_Z / 2);
+            return glm::distance(safeRenderCameraPos, ca) > glm::distance(safeRenderCameraPos, cb);
+        });
+        lastCameraPosForAlphaSort = safeRenderCameraPos;
+    }
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    for (Chunk* ch : alphaChunksCache)
+        ch->renderAlphaBlocks(false);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
 
     // Рендер воды (с сортировкой)
     updateWaterChunksCache();
@@ -6042,6 +6139,7 @@ void main() {
         uv.y = uv.y / frames + floor(frame) / frames;
     }
     vec4 color = texture(ourTexture, uv); if (u_isWater==1) color.a = 0.7;
+    if (u_isRain != 1 && color.a < 0.08) discard;
     if (u_isRain==1) {
         float rainMask = max(color.r, max(color.g, color.b));
         float sourceAlpha = (color.a > 0.01) ? color.a : rainMask;

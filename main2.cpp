@@ -5281,18 +5281,9 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     // Прыжок/всплытие и погружение
     const bool wantsSwimUp = !inventoryOpen && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
     const bool wantsDiveDown = !inventoryOpen && glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
-    if (wantsSwimUp) {
-        if (fullySubmerged) {
-            const float swimImpulse = 3.8f;
-            playerVelocity.y = std::min(playerVelocity.y + swimImpulse * deltaTime * 7.5f, 2.6f);
-        } else if (inWater) {
-            // У поверхности не подбрасываем игрока вверх бесконечно: удержание Space
-            // должно оставлять инерцию и давать слегка погрузиться обратно в воду.
-            playerVelocity.y = std::min(playerVelocity.y, 0.15f);
-        } else if (isOnGround) {
-            playerVelocity.y = JUMP_POWER;
-            isOnGround = false;
-        }
+    if (wantsSwimUp && !inWater && isOnGround) {
+        playerVelocity.y = JUMP_POWER;
+        isOnGround = false;
     }
     
     playerVelocity.y += currentGravity * deltaTime;
@@ -5302,20 +5293,19 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
         playerVelocity.y *= 0.86f;
 
         if (fullySubmerged) {
-            // Под водой игрок слабо всплывает, но может уверенно погружаться через Shift.
+            // Под водой игрок всплывает плавно, без резкого выстреливания к поверхности.
             if (wantsDiveDown && !wantsSwimUp) {
                 playerVelocity.y = std::max(playerVelocity.y - 8.5f * deltaTime, -2.3f);
+            } else if (wantsSwimUp) {
+                playerVelocity.y = std::min(playerVelocity.y + 0.85f * deltaTime, 1.15f);
             } else {
-                playerVelocity.y = std::min(playerVelocity.y + 0.55f * deltaTime, 1.5f);
+                playerVelocity.y = std::min(playerVelocity.y + 0.25f * deltaTime, 0.8f);
             }
         } else if (atWaterSurface) {
-            // На поверхности не даём игроку "идти по воде": даже при удержании Space
-            // скорость мягко уходит вниз, чтобы персонаж слегка проседал обратно в воду.
+            // У поверхности Space теперь мягко выводит тело выше воды, но без режима "ходьбы по воде":
+            // после выхода к уровню ног вода и гравитация сами плавно опустят игрока обратно.
             if (wantsSwimUp) {
-                playerVelocity.y = std::min(playerVelocity.y, -0.12f);
-                if (playerVelocity.y > -0.45f) {
-                    playerVelocity.y -= 1.1f * deltaTime;
-                }
+                playerVelocity.y = glm::clamp(playerVelocity.y + 0.55f * deltaTime, -0.10f, 0.32f);
             } else if (wantsDiveDown) {
                 playerVelocity.y = std::max(playerVelocity.y - 7.0f * deltaTime, -1.6f);
             } else {
@@ -6189,10 +6179,11 @@ void main() {
     vec4 color = texture(ourTexture, uv);
     if (u_isWater==1) {
         float depthFactor = clamp(BlockLightLevel, 0.0, 1.0);
-        vec3 shallowTint = vec3(0.33, 0.58, 0.78);
-        vec3 deepTint = vec3(0.03, 0.16, 0.28);
-        color.rgb = mix(color.rgb * shallowTint, deepTint, pow(depthFactor, 0.75));
-        color.a = mix(0.58, 0.92, depthFactor);
+        vec3 shallowTint = vec3(0.28, 0.52, 0.72);
+        vec3 deepTint = vec3(0.005, 0.055, 0.12);
+        float depthFog = pow(depthFactor, 0.42);
+        color.rgb = mix(color.rgb * shallowTint, deepTint, depthFog);
+        color.a = mix(0.66, 0.985, depthFog);
     }
     if (u_isRain != 1 && color.a < 0.08) discard;
     if (u_isRain==1) {
@@ -6222,7 +6213,7 @@ void main() {
     float emissiveLighting = pow(blockLightOnly, 1.35) * 0.95;
     float lighting = max(sunLighting, emissiveLighting);
 
-    if (u_isWater==1) lighting = max(lighting, mix(0.18, 0.08, clamp(BlockLightLevel, 0.0, 1.0)));
+    if (u_isWater==1) lighting = max(lighting, mix(0.16, 0.045, pow(clamp(BlockLightLevel, 0.0, 1.0), 0.42)));
     FragColor = vec4(color.rgb * lighting, color.a);
 }
 )";

@@ -3482,6 +3482,17 @@ struct Chunk {
         return baseLight * ao;
     }
 
+    float getWaterDepthFactor(int lx, int ly, int lz) const {
+        int wx = pos.x * CHUNK_SIZE_X + lx;
+        int wz = pos.y * CHUNK_SIZE_Z + lz;
+        int depth = 0;
+        for (int sy = ly; sy >= 0 && depth < 12; --sy) {
+            if (getBlockAtForMesh(wx, sy, wz) != 5) break;
+            ++depth;
+        }
+        return glm::clamp(static_cast<float>(depth) / 12.0f, 0.0f, 1.0f);
+    }
+
     float getVertexBlockLight(int lx, int ly, int lz, const glm::vec3& normal, const glm::vec3& vertexOffset, const std::array<glm::ivec3,4>& neighborOffsets) {
         int wx = pos.x * CHUNK_SIZE_X + lx;
         int wz = pos.y * CHUNK_SIZE_Z + lz;
@@ -3619,7 +3630,9 @@ struct Chunk {
                     
                     glm::vec3 vertexOffset(face[i], face[i+1], face[i+2]);
                     float light = getVertexLight(x, y, z, normal, vertexOffset, faceNeighborOffsets[faceIdx]);
-                    float blockLight = getVertexBlockLight(x, y, z, normal, vertexOffset, faceNeighborOffsets[faceIdx]);
+                    float blockLight = (type == 5)
+                        ? getWaterDepthFactor(x, y, z)
+                        : getVertexBlockLight(x, y, z, normal, vertexOffset, faceNeighborOffsets[faceIdx]);
                     out.push_back(light);
                     out.push_back(blockLight);
                 }
@@ -5269,9 +5282,13 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     const bool wantsSwimUp = !inventoryOpen && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
     const bool wantsDiveDown = !inventoryOpen && glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
     if (wantsSwimUp) {
-        if (inWater) {
-            const float swimImpulse = fullySubmerged ? 3.8f : 2.0f;
-            playerVelocity.y = std::min(playerVelocity.y + swimImpulse * deltaTime * 7.5f, fullySubmerged ? 2.6f : 1.2f);
+        if (fullySubmerged) {
+            const float swimImpulse = 3.8f;
+            playerVelocity.y = std::min(playerVelocity.y + swimImpulse * deltaTime * 7.5f, 2.6f);
+        } else if (inWater) {
+            // У поверхности не подбрасываем игрока вверх бесконечно: удержание Space
+            // должно оставлять инерцию и давать слегка погрузиться обратно в воду.
+            playerVelocity.y = std::min(playerVelocity.y, 0.15f);
         } else if (isOnGround) {
             playerVelocity.y = JUMP_POWER;
             isOnGround = false;
@@ -5292,9 +5309,13 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
                 playerVelocity.y = std::min(playerVelocity.y + 0.55f * deltaTime, 1.5f);
             }
         } else if (atWaterSurface) {
-            // На поверхности держим голову у кромки воды, но не позволяем левитировать над ней.
+            // На поверхности не даём игроку "идти по воде": даже при удержании Space
+            // скорость мягко уходит вниз, чтобы персонаж слегка проседал обратно в воду.
             if (wantsSwimUp) {
-                playerVelocity.y = std::min(playerVelocity.y, 0.9f);
+                playerVelocity.y = std::min(playerVelocity.y, -0.12f);
+                if (playerVelocity.y > -0.45f) {
+                    playerVelocity.y -= 1.1f * deltaTime;
+                }
             } else if (wantsDiveDown) {
                 playerVelocity.y = std::max(playerVelocity.y - 7.0f * deltaTime, -1.6f);
             } else {
@@ -6165,7 +6186,14 @@ void main() {
         float frame = fract(u_time * speed) * frames;
         uv.y = uv.y / frames + floor(frame) / frames;
     }
-    vec4 color = texture(ourTexture, uv); if (u_isWater==1) color.a = 0.7;
+    vec4 color = texture(ourTexture, uv);
+    if (u_isWater==1) {
+        float depthFactor = clamp(BlockLightLevel, 0.0, 1.0);
+        vec3 shallowTint = vec3(0.33, 0.58, 0.78);
+        vec3 deepTint = vec3(0.03, 0.16, 0.28);
+        color.rgb = mix(color.rgb * shallowTint, deepTint, pow(depthFactor, 0.75));
+        color.a = mix(0.58, 0.92, depthFactor);
+    }
     if (u_isRain != 1 && color.a < 0.08) discard;
     if (u_isRain==1) {
         float rainMask = max(color.r, max(color.g, color.b));
@@ -6177,7 +6205,7 @@ void main() {
     }
     vec3 n = normalize(Normal);
     float vertexLight = clamp(LightLevel, 0.0, 1.0);
-    float blockLightOnly = clamp(BlockLightLevel, 0.0, 1.0);
+    float blockLightOnly = (u_isWater == 1) ? 0.0 : clamp(BlockLightLevel, 0.0, 1.0);
 
     // Minecraft-подобное постоянное затенение граней: без "солнца сбоку".
     float faceShade = 0.86;
@@ -6194,7 +6222,7 @@ void main() {
     float emissiveLighting = pow(blockLightOnly, 1.35) * 0.95;
     float lighting = max(sunLighting, emissiveLighting);
 
-    if (u_isWater==1) lighting = max(lighting, 0.12);
+    if (u_isWater==1) lighting = max(lighting, mix(0.18, 0.08, clamp(BlockLightLevel, 0.0, 1.0)));
     FragColor = vec4(color.rgb * lighting, color.a);
 }
 )";

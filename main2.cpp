@@ -173,7 +173,7 @@ void addFaceToVertices(std::vector<float>& verts,
         {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
         {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
         {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
-        {1, 64}, {2, 64}, {3, 64}, {4, 64}, {5, 8}, {6, 64}, {7, 64}, {8, 32}, {9, 16}
+        {1, 64}, {2, 64}, {3, 64}, {4, 64}, {5, 8}, {6, 64}, {7, 64}, {8, 32}, {12, 16}
     };
 void drawDimOverlay(int screenW, int screenH, float alpha);
 void renderInventory(int screenW, int screenH);
@@ -5378,14 +5378,17 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
 
     // Выбор слота хотбара
     if (!inventoryOpen) {
-        for (int i = 0; i < 9; ++i)
-            if (glfwGetKey(window, GLFW_KEY_1 + i) == GLFW_PRESS)
+        for (int i = 0; i < 9; ++i) {
+            if (glfwGetKey(window, GLFW_KEY_1 + i) == GLFW_PRESS) {
                 currentHotbarSlot = i;
-        if (glfwGetKey(window, GLFW_KEY_9) == GLFW_PRESS)
-            currentBlockType = 9;
-        for (int i = 1; i <= 9; ++i)
-            if (glfwGetKey(window, GLFW_KEY_0 + i) == GLFW_PRESS && blockTypes.count(i))
-                currentBlockType = i;
+                // Синхронизируем currentBlockType с выбранным слотом хотбара
+                int blockFromHotbar = playerInventoryItems[27 + currentHotbarSlot].blockType;
+                if (blockFromHotbar != 0) {
+                    currentBlockType = blockFromHotbar;
+                }
+            }
+        }
+        // Удалите старый код с KEY_9 и KEY_0+i, так как теперь всё идёт через хотбар
     }
 }
 
@@ -5771,21 +5774,40 @@ void renderRainLayer(float currentTime) {
     const float gridSize = 1.0f;
     const float dropWidth = 0.032f;
     const float dropLength = 1.0f;
-    const float rainTopOffset = 44.0f;
-    const float rainBottomOffset = -2.0f;
+    const float rainTopOffset = rainRadius;
+    const float rainBottomOffset = -rainRadius;
     const float fallSpeed = 15.0f;
     const float windX = 0.18f;
     const float windZ = -0.09f;
 
-    const float baseX = std::round(renderCameraPos.x / gridSize) * gridSize;
-    const float baseZ = std::round(renderCameraPos.z / gridSize) * gridSize;
+    glm::vec3 playerRainCenter = cameraPos;
+    if (!std::isfinite(playerRainCenter.x) || !std::isfinite(playerRainCenter.y) || !std::isfinite(playerRainCenter.z)) {
+        playerRainCenter = renderCameraPos;
+    } else {
+        playerRainCenter.y = cameraPos.y - EYE_HEIGHT + PLAYER_HEIGHT * 0.5f;
+    }
+
+    glm::vec3 rainAnchorPos = playerRainCenter;
+    if (cameraMode == CameraMode::ThirdPersonBack &&
+        std::isfinite(renderCameraPos.x) && std::isfinite(renderCameraPos.y) && std::isfinite(renderCameraPos.z)) {
+        // В третьем лице видимый центр дождя воспринимается между камерой и игроком.
+        // Поэтому не привязываем объём полностью ни к вынесенной камере, ни к модели:
+        // середина отрезка удерживает игрока внутри центральной плотной зоны, а не на её краю.
+        rainAnchorPos.x = (playerRainCenter.x + renderCameraPos.x) * 0.5f;
+        rainAnchorPos.z = (playerRainCenter.z + renderCameraPos.z) * 0.5f;
+    }
+
+    // Центрируем область без округления к мировой сетке, чтобы радиус дождя не прыгал
+    // и не выталкивал игрока к краю при дробных координатах.
+    const float baseX = rainAnchorPos.x;
+    const float baseZ = rainAnchorPos.z;
     const int cellRadius = static_cast<int>(std::ceil(rainRadius / gridSize));
 
     std::vector<float> v;
     v.reserve(4096 * 6 * 10);
 
-    const float rainTop = renderCameraPos.y + rainTopOffset;
-    const float rainBottom = renderCameraPos.y + rainBottomOffset;
+    const float rainTop = rainAnchorPos.y + rainTopOffset;
+    const float rainBottom = rainAnchorPos.y + rainBottomOffset;
     const float heightRange = std::max(1.0f, rainTop - rainBottom);
 
     auto appendDropQuad = [&](const glm::vec3& center, float length, float width, float alpha) {
@@ -5807,20 +5829,23 @@ void renderRainLayer(float currentTime) {
         for (int gz = -cellRadius; gz <= cellRadius; ++gz) {
             float worldX = baseX + gx * gridSize;
             float worldZ = baseZ + gz * gridSize;
-            float dx = worldX - renderCameraPos.x;
-            float dz = worldZ - renderCameraPos.z;
+            float dx = worldX - rainAnchorPos.x;
+            float dz = worldZ - rainAnchorPos.z;
             if ((dx * dx + dz * dz) > (rainRadius * rainRadius)) continue;
+
+            float playerDx = worldX - playerRainCenter.x;
+            float playerDz = worldZ - playerRainCenter.z;
+            float playerDist2 = playerDx * playerDx + playerDz * playerDz;
 
             const int ix = static_cast<int>(std::floor(worldX));
             const int iz = static_cast<int>(std::floor(worldZ));
             uint32_t h = static_cast<uint32_t>((ix * 73856093) ^ (iz * 19349663));
-            float dist2 = dx * dx + dz * dz;
-            bool forceInnerRain = dist2 < 100.0f; // Гарантируем дождь в зоне игрока (~10 блоков).
+            bool forceInnerRain = playerDist2 < 100.0f; // Гарантируем дождь в зоне игрока (~10 блоков).
             float densityBias = 68.0f;
-            if (dist2 < 64.0f) densityBias = 92.0f; // Гуще в радиусе ~8 блоков от игрока.
+            if (playerDist2 < 64.0f) densityBias = 92.0f; // Гуще в радиусе ~8 блоков от игрока.
             if (!forceInnerRain && (h % 100) > densityBias) continue;
 
-            int dropCount = (dist2 < 16.0f) ? 2 : 1; // Доп. капля совсем рядом с игроком.
+            int dropCount = (playerDist2 < 16.0f) ? 2 : 1; // Доп. капля совсем рядом с игроком.
             for (int i = 0; i < dropCount; ++i) {
                 uint32_t hi = h ^ static_cast<uint32_t>(i * 0x9e3779b9u);
                 float jitterX = ((hi & 0x3FF) / 1023.0f - 0.5f) * gridSize;
@@ -5840,8 +5865,10 @@ void renderRainLayer(float currentTime) {
                     float y = rainTop - layeredFall;
 
                     glm::vec3 center(worldX + jitterX, y, worldZ + jitterZ);
-                    center.x += windX * fallProgress;
-                    center.z += windZ * fallProgress;
+                    // Компенсируем среднее смещение ветра: капли всё ещё наклоняются по падению,
+                    // но вся область дождя остаётся визуально центрированной вокруг игрока.
+                    center.x += windX * (fallProgress - 0.5f);
+                    center.z += windZ * (fallProgress - 0.5f);
 
                     if (center.y + length * 0.5f < rainBottom) continue;
                     appendDropQuad(center, length, width, alpha);

@@ -5302,10 +5302,10 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
                 playerVelocity.y = std::min(playerVelocity.y + 0.25f * deltaTime, 0.8f);
             }
         } else if (atWaterSurface) {
-            // У поверхности Space теперь мягко выводит тело выше воды, но без режима "ходьбы по воде":
-            // после выхода к уровню ног вода и гравитация сами плавно опустят игрока обратно.
+            // У поверхности Space работает как плавное всплытие, но без постоянного "шага" по воде:
+            // как только ноги вышли из воды, подъём гасится и персонаж мягко проседает обратно.
             if (wantsSwimUp) {
-                playerVelocity.y = glm::clamp(playerVelocity.y + 0.55f * deltaTime, -0.10f, 0.32f);
+                playerVelocity.y = glm::clamp(playerVelocity.y + 1.6f * deltaTime, -0.08f, feetInWater ? 0.65f : 0.12f);
             } else if (wantsDiveDown) {
                 playerVelocity.y = std::max(playerVelocity.y - 7.0f * deltaTime, -1.6f);
             } else {
@@ -5315,8 +5315,21 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
                 }
             }
 
-            if (!feetInWater) {
-                playerVelocity.y = std::min(playerVelocity.y, -0.25f);
+            if (!feetInWater && (!wantsSwimUp || playerVelocity.y > 0.12f)) {
+                playerVelocity.y = std::min(playerVelocity.y, -0.18f);
+            }
+        } else {
+            // Частичное касание воды (например, только ноги в воде) раньше не попадало ни в одну
+            // ветку, поэтому Space/Shift визуально переставали работать.
+            if (wantsDiveDown && !wantsSwimUp) {
+                playerVelocity.y = std::max(playerVelocity.y - 6.5f * deltaTime, -1.7f);
+            } else if (wantsSwimUp) {
+                playerVelocity.y = glm::clamp(playerVelocity.y + 1.2f * deltaTime, -0.12f, 0.45f);
+            } else {
+                playerVelocity.y = std::min(playerVelocity.y, 0.0f);
+                if (playerVelocity.y > -0.35f) {
+                    playerVelocity.y -= 0.9f * deltaTime;
+                }
             }
         }
 

@@ -198,6 +198,7 @@ bool handleSliderClick(Slider& slider, double mouseX, double mouseY);
 void handleSliderDrag(Slider& slider, double mouseX, double mouseY);
 void releaseSlider(Slider& slider);
 void initFOVSlider(std::vector<Slider>& sliders);
+bool isWaterBlockAt(float x, float y, float z);
 
 
 // ----------------------------------------------------------------------
@@ -4074,13 +4075,34 @@ float calculateFallDamage(float distance) {
     return glm::clamp(damage, 0.0f, MAX_FALL_DAMAGE_HEIGHT - MIN_FALL_DAMAGE_HEIGHT);
 }
 
+bool isWaterBlockAt(float x, float y, float z) {
+    int bx = static_cast<int>(std::floor(x));
+    int by = static_cast<int>(std::floor(y));
+    int bz = static_cast<int>(std::floor(z));
+    return getBlockAt(bx, by, bz) == 5;
+}
+
 bool isPlayerInWater() {
     glm::vec3 feetPos = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
-    int blockAtFeet = getBlockAt(floor(feetPos.x), floor(feetPos.y + 0.1f), floor(feetPos.z));
-    int blockAtWaist = getBlockAt(floor(cameraPos.x), floor(cameraPos.y - 0.5f), floor(cameraPos.z));
-    int blockAtHead = getBlockAt(floor(cameraPos.x), floor(cameraPos.y), floor(cameraPos.z));
     
-    return (blockAtFeet == 5 || blockAtWaist == 5 || blockAtHead == 5);
+    // Проверяем несколько точек для более точного определения
+    glm::vec3 checkPoints[] = {
+        feetPos,                                    // Ноги
+        feetPos + glm::vec3(0.0f, 0.5f, 0.0f),     // Колени
+        feetPos + glm::vec3(0.0f, 1.0f, 0.0f),     // Пояс
+        cameraPos                                   // Голова
+    };
+    
+    for (const auto& point : checkPoints) {
+        int blockX = static_cast<int>(std::floor(point.x));
+        int blockY = static_cast<int>(std::floor(point.y));
+        int blockZ = static_cast<int>(std::floor(point.z));
+        
+        if (getBlockAt(blockX, blockY, blockZ) == 5) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Функция нанесения урона
@@ -5196,12 +5218,10 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     }
     f5WasPressed = f5Pressed;
 
-    
     // Обработка ESC
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
         if (!escWasPressed) {
             if (currentState == GameState::CREATIVE_INVENTORY) {
-                // Выход из инвентаря
                 currentState = GameState::IN_GAME;
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                 glfwGetCursorPos(window, &lastX, &lastY);
@@ -5216,16 +5236,14 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     } else {
         escWasPressed = false;
     }
-    
+
     // Обработка клавиши E (инвентарь)
     if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) {
         if (!eWasPressed) {
             if (currentState == GameState::IN_GAME) {
-                // Открываем инвентарь
                 currentState = GameState::CREATIVE_INVENTORY;
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
             } else if (currentState == GameState::CREATIVE_INVENTORY) {
-                // Закрываем инвентарь
                 currentState = GameState::IN_GAME;
                 glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
                 glfwGetCursorPos(window, &lastX, &lastY);
@@ -5236,10 +5254,7 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     } else {
         eWasPressed = false;
     }
-    
-    // =========================================================
-    // ФИЗИКА РАБОТАЕТ И В ИНВЕНТАРЕ, НО УПРАВЛЕНИЕ БЛОКИРУЕТСЯ
-    // =========================================================
+
     const bool inventoryOpen = (currentState == GameState::CREATIVE_INVENTORY);
     if (currentState != GameState::IN_GAME && !inventoryOpen) return;
     if (!movementEnabled) return;
@@ -5251,21 +5266,28 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     }
     pWasPressed = pPressed;
 
-    // Определяем состояние воды
+    // Определение состояния воды
     glm::vec3 feetPosCheck = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
-    bool feetInWater = getBlockAt(floor(feetPosCheck.x), floor(feetPosCheck.y + 0.1f), floor(feetPosCheck.z)) == 5;
-    bool headInWater = getBlockAt(floor(cameraPos.x), floor(cameraPos.y + 0.2f), floor(cameraPos.z)) == 5;
-    bool waistInWater = getBlockAt(floor(cameraPos.x), floor(cameraPos.y - 0.5f), floor(cameraPos.z)) == 5;
     
-    bool inWater = feetInWater || waistInWater || headInWater;
-    bool fullySubmerged = headInWater && waistInWater;
-    bool atWaterSurface = waistInWater && !headInWater;
+    bool headInWater = getBlockAt(floor(cameraPos.x), floor(cameraPos.y), floor(cameraPos.z)) == 5;
+    bool chestInWater = getBlockAt(floor(cameraPos.x), floor(cameraPos.y - 0.6f), floor(cameraPos.z)) == 5;
+    bool waistInWater = getBlockAt(floor(cameraPos.x), floor(cameraPos.y - 1.1f), floor(cameraPos.z)) == 5;
+    bool feetInWater = getBlockAt(floor(feetPosCheck.x), floor(feetPosCheck.y + 0.1f), floor(feetPosCheck.z)) == 5;
+    
+    bool inWater = feetInWater || waistInWater || chestInWater || headInWater;
+    bool fullySubmerged = headInWater && chestInWater;
+    bool atWaterSurface = (waistInWater || chestInWater) && !headInWater;
+    bool touchingWater = feetInWater && !waistInWater;
+    
     static bool wasInWaterLastFrame = false;
 
-    // В воде гравитация и скорость слабее, но не "ватные" как раньше.
-    float currentGravity = inWater ? GRAVITY * 0.12f : GRAVITY;
-    float moveSpeed = inWater ? WALK_SPEED * 0.62f : WALK_SPEED;
-
+    // Параметры воды
+    const float WATER_DRAG = 0.8f;           // Сопротивление воды горизонтальное
+    const float WATER_GRAVITY = -8.0f;       // Гравитация в воде (слабее)
+    const float MAX_WATER_SPEED_UP = 1.5f;   // Макс. скорость всплытия
+    const float MAX_WATER_SPEED_DOWN = -1.5f; // Макс. скорость погружения
+    
+    // Горизонтальное движение
     glm::vec3 moveDir(0.0f);
     if (!inventoryOpen) {
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) moveDir += cameraFront;
@@ -5276,79 +5298,125 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     
     bool moving = glm::length(moveDir) > 0.1f;
     if (moving) moveDir = glm::normalize(moveDir);
-    glm::vec3 desiredMove = moveDir * moveSpeed * deltaTime;
     
-    // Прыжок/всплытие и погружение
-    const bool wantsSwimUp = !inventoryOpen && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
-    const bool wantsDiveDown = !inventoryOpen && glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
-    if (wantsSwimUp && !inWater && isOnGround) {
-        playerVelocity.y = JUMP_POWER;
-        isOnGround = false;
+    // Базовая скорость ходьбы
+    float walkSpeed = WALK_SPEED;
+    
+    // В воде скорость снижена
+    if (inWater) {
+        walkSpeed = WALK_SPEED * 0.4f;  // Скорость в воде ~40%
+    } else if (touchingWater) {
+        walkSpeed = WALK_SPEED * 0.7f;  // Касание воды
     }
     
-    playerVelocity.y += currentGravity * deltaTime;
-
+    glm::vec3 desiredMove = moveDir * walkSpeed * deltaTime;
+    
+    // Прыжок/всплытие/ныряние
+    const bool wantsJump = !inventoryOpen && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+    const bool wantsDive = !inventoryOpen && glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
+    
+    // =========================================================
+    // ВЕРТИКАЛЬНАЯ ФИЗИКА (ВОДА) - БЕЗ АВТОМАТИЧЕСКОГО ВСПЛЫТИЯ
+    // =========================================================
     if (inWater) {
-        // Вода гасит вертикальную скорость, но оставляет ощущение инерции.
-        playerVelocity.y *= 0.86f;
-
+        // Применяем сопротивление воды к горизонтальному движению
+        desiredMove *= 0.6f;
+        
         if (fullySubmerged) {
-            // Под водой игрок всплывает плавно, без резкого выстреливания к поверхности.
-            if (wantsDiveDown && !wantsSwimUp) {
-                playerVelocity.y = std::max(playerVelocity.y - 8.5f * deltaTime, -2.3f);
-            } else if (wantsSwimUp) {
-                playerVelocity.y = std::min(playerVelocity.y + 0.85f * deltaTime, 1.15f);
+            // Полностью под водой
+            if (wantsJump) {
+                // Всплытие при нажатии Space
+                playerVelocity.y += 10.0f * deltaTime;
+                if (playerVelocity.y > MAX_WATER_SPEED_UP) playerVelocity.y = MAX_WATER_SPEED_UP;
+            } else if (wantsDive) {
+                // Ныряние вниз при нажатии Shift
+                playerVelocity.y -= 10.0f * deltaTime;
+                if (playerVelocity.y < MAX_WATER_SPEED_DOWN) playerVelocity.y = MAX_WATER_SPEED_DOWN;
             } else {
-                playerVelocity.y = std::min(playerVelocity.y + 0.25f * deltaTime, 0.8f);
+                // НЕТ АВТОМАТИЧЕСКОГО ВСПЛЫТИЯ!
+                // Применяем только гравитацию и сопротивление
+                playerVelocity.y += WATER_GRAVITY * deltaTime;
+                playerVelocity.y *= (1.0f - WATER_DRAG * deltaTime);
             }
+            
         } else if (atWaterSurface) {
-            // У поверхности Space работает как плавное всплытие, но без постоянного "шага" по воде:
-            // как только ноги вышли из воды, подъём гасится и персонаж мягко проседает обратно.
-            if (wantsSwimUp) {
-                playerVelocity.y = glm::clamp(playerVelocity.y + 1.6f * deltaTime, -0.08f, feetInWater ? 0.65f : 0.12f);
-            } else if (wantsDiveDown) {
-                playerVelocity.y = std::max(playerVelocity.y - 7.0f * deltaTime, -1.6f);
-            } else {
-                playerVelocity.y = std::min(playerVelocity.y, 0.0f);
-                if (playerVelocity.y > -0.55f) {
-                    playerVelocity.y -= 1.6f * deltaTime;
+            // На поверхности воды (голова над водой)
+            if (wantsJump) {
+                // Прыжок на поверхности (как ластами)
+                if (playerVelocity.y <= 0.1f) {
+                    playerVelocity.y = JUMP_POWER * 0.6f;
+                } else {
+                    playerVelocity.y += 8.0f * deltaTime;
                 }
-            }
-
-            if (!feetInWater && (!wantsSwimUp || playerVelocity.y > 0.12f)) {
-                playerVelocity.y = std::min(playerVelocity.y, -0.18f);
-            }
-        } else {
-            // Частичное касание воды (например, только ноги в воде) раньше не попадало ни в одну
-            // ветку, поэтому Space/Shift визуально переставали работать.
-            if (wantsDiveDown && !wantsSwimUp) {
-                playerVelocity.y = std::max(playerVelocity.y - 6.5f * deltaTime, -1.7f);
-            } else if (wantsSwimUp) {
-                playerVelocity.y = glm::clamp(playerVelocity.y + 1.2f * deltaTime, -0.12f, 0.45f);
+                if (playerVelocity.y > MAX_WATER_SPEED_UP) playerVelocity.y = MAX_WATER_SPEED_UP;
+            } else if (wantsDive) {
+                // Ныряние под воду
+                playerVelocity.y -= 8.0f * deltaTime;
+                if (playerVelocity.y < MAX_WATER_SPEED_DOWN) playerVelocity.y = MAX_WATER_SPEED_DOWN;
             } else {
-                playerVelocity.y = std::min(playerVelocity.y, 0.0f);
-                if (playerVelocity.y > -0.35f) {
-                    playerVelocity.y -= 0.9f * deltaTime;
-                }
+                // На поверхности без действий - тонем или стоим на месте
+                // Применяем слабую гравитацию
+                playerVelocity.y += WATER_GRAVITY * 0.5f * deltaTime;
+                playerVelocity.y *= (1.0f - WATER_DRAG * deltaTime);
+                
+                // Ограничиваем, чтобы не уйти слишком глубоко
+                if (playerVelocity.y < -0.8f) playerVelocity.y = -0.8f;
+            }
+            
+        } else if (waistInWater || chestInWater) {
+            // Частично в воде (пояс или грудь)
+            if (wantsJump) {
+                // Всплытие при прыжке
+                playerVelocity.y += 7.0f * deltaTime;
+                if (playerVelocity.y > MAX_WATER_SPEED_UP) playerVelocity.y = MAX_WATER_SPEED_UP;
+            } else if (wantsDive && !isOnGround) {
+                // Ныряние
+                playerVelocity.y -= 7.0f * deltaTime;
+                if (playerVelocity.y < MAX_WATER_SPEED_DOWN) playerVelocity.y = MAX_WATER_SPEED_DOWN;
+            } else {
+                // НЕТ АВТОМАТИЧЕСКОГО ВСПЛЫТИЯ
+                // Применяем только гравитацию
+                playerVelocity.y += WATER_GRAVITY * 0.7f * deltaTime;
+                
+                // Ограничиваем скорость падения в воде
+                if (playerVelocity.y < MAX_WATER_SPEED_DOWN) playerVelocity.y = MAX_WATER_SPEED_DOWN;
             }
         }
-
-        playerVelocity.y = std::clamp(playerVelocity.y, -3.2f, 2.6f);
-    } else if (wasInWaterLastFrame && playerVelocity.y > 0.0f) {
-        // При выходе из воды резко гасим остаточный подъём, чтобы игрок не "парил" над поверхностью.
-        playerVelocity.y *= 0.28f;
+        
+        // Ограничение вертикальной скорости в воде
+        playerVelocity.y = glm::clamp(playerVelocity.y, MAX_WATER_SPEED_DOWN, MAX_WATER_SPEED_UP);
+        
+        // В воде нет урона от падения
+        fallDistance = 0.0f;
+        
+    } else {
+        // =========================================================
+        // ВЕРТИКАЛЬНАЯ ФИЗИКА (НА СУШЕ)
+        // =========================================================
+        
+        if (wantsJump && isOnGround) {
+            playerVelocity.y = JUMP_POWER;
+            isOnGround = false;
+            soundManager.playPlayerSound("step", gameStarted);
+        }
+        
+        playerVelocity.y += GRAVITY * deltaTime;
+        
+        // Терминальная скорость падения
+        const float MAX_FALL_SPEED = -54.0f;
+        if (playerVelocity.y < MAX_FALL_SPEED) playerVelocity.y = MAX_FALL_SPEED;
     }
-
-    wasInWaterLastFrame = inWater;
     
+    // =========================================================
+    // ПРИМЕНЕНИЕ КОЛЛИЗИЙ
+    // =========================================================
     glm::vec3 delta = desiredMove;
     delta.y = playerVelocity.y * deltaTime;
     
     glm::vec3 feetPos = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     glm::vec3 actualDelta = applyCollision(feetPos, delta);
 
-    // Сохраняем фактическое горизонтальное движение за кадр,
-    // чтобы рендер модели корректно знал направление движения тела.
+    // Сохраняем горизонтальную скорость
     if (deltaTime > 0.00001f) {
         playerVelocity.x = actualDelta.x / deltaTime;
         playerVelocity.z = actualDelta.z / deltaTime;
@@ -5360,17 +5428,21 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     feetPos += actualDelta;
     cameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     
-    if (feetPos.y < 0.0f) {
+    // Защита от падения сквозь мир
+    if (feetPos.y < -10.0f) {
         feetPos.y = 0.0f;
         cameraPos = feetPos + glm::vec3(0, EYE_HEIGHT, 0);
-        playerVelocity.y = 0;
+        playerVelocity = glm::vec3(0.0f);
         isOnGround = true;
+        applyDamage(10);
     }
 
-    // Звук шагов
+    // =========================================================
+    // ЗВУКИ ШАГОВ
+    // =========================================================
     static bool wasMoving = false;
     
-    if (isOnGround && moving) {
+    if (isOnGround && moving && !inWater) {
         if (!wasMoving) {
             stepSoundTimer = STEP_SOUND_INTERVAL;
         }
@@ -5388,23 +5460,32 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     }
     
     wasMoving = moving;
+    
+    // Звуки входа/выхода из воды
+    static bool wasInWaterSound = false;
+    if (inWater && !wasInWaterSound) {
+        soundManager.play(5, "step", gameStarted);
+    } else if (!inWater && wasInWaterSound) {
+        soundManager.play(5, "step", gameStarted);
+    }
+    wasInWaterSound = inWater;
+    wasInWaterLastFrame = inWater;
 
-    // Выбор слота хотбара
+    // =========================================================
+    // ВЫБОР СЛОТА ХОТБАРА
+    // =========================================================
     if (!inventoryOpen) {
         for (int i = 0; i < 9; ++i) {
             if (glfwGetKey(window, GLFW_KEY_1 + i) == GLFW_PRESS) {
                 currentHotbarSlot = i;
-                // Синхронизируем currentBlockType с выбранным слотом хотбара
                 int blockFromHotbar = playerInventoryItems[27 + currentHotbarSlot].blockType;
                 if (blockFromHotbar != 0) {
                     currentBlockType = blockFromHotbar;
                 }
             }
         }
-        // Удалите старый код с KEY_9 и KEY_0+i, так как теперь всё идёт через хотбар
     }
 }
-
 
 void updateGameplayCamera() {
     glm::vec3 feetPos = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);

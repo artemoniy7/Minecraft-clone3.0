@@ -2111,15 +2111,22 @@ glm::vec3 sampleColorMap(const BiomeColorMap& map, float temperature, float humi
 glm::vec3 getBiomeTintColor(int wx, int wz, bool foliage) {
     float temp = (biomeTempNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
     float humid = (biomeHumidNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
-    glm::vec3 tint = sampleColorMap(foliage ? foliageColorMap : grassColorMap, temp, humid);
 
-    // The Minecraft colormaps are meant to tint gray source textures, but with our
-    // day/night lighting the raw colors look too dark in common plains/forest areas.
-    // Lift the tint toward a brighter green while keeping biome differences visible.
-    const glm::vec3 vanillaLikeGreen = foliage ? glm::vec3(0.56f, 0.78f, 0.34f)
-                                               : glm::vec3(0.66f, 0.84f, 0.38f);
-    tint = glm::mix(tint, vanillaLikeGreen, foliage ? 0.20f : 0.30f);
-    tint = glm::mix(tint, glm::vec3(1.0f), foliage ? 0.08f : 0.12f);
+    // Bias ordinary terrain toward Minecraft's warmer plains/forest range.
+    // Without this, the low-frequency noise often samples cold colormap areas,
+    // making regular grass look like taiga or snowy-biome grass.
+    float sampleTemp = glm::clamp(temp * 0.72f + 0.24f, 0.0f, 1.0f);
+    float sampleHumid = glm::clamp(humid * 0.82f + 0.10f, 0.0f, 1.0f);
+    glm::vec3 tint = sampleColorMap(foliage ? foliageColorMap : grassColorMap, sampleTemp, sampleHumid);
+
+    const glm::vec3 vanillaLikeGreen = foliage ? glm::vec3(0.58f, 0.79f, 0.34f)
+                                               : glm::vec3(0.72f, 0.86f, 0.36f);
+    tint = glm::mix(tint, vanillaLikeGreen, foliage ? 0.28f : 0.55f);
+    tint = glm::mix(tint, glm::vec3(1.0f), foliage ? 0.06f : 0.10f);
+    if (!foliage) {
+        tint.b *= 0.88f;
+        tint.r = std::max(tint.r, tint.g * 0.58f);
+    }
     return glm::clamp(tint, glm::vec3(0.0f), glm::vec3(1.0f));
 }
 

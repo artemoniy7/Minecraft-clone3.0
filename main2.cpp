@@ -118,6 +118,22 @@ int blockLightEmission[256] = {0};
 int blockOpacity[256] = {0};
 int maxBlockLightRadius = 0;
 
+constexpr int WORLD_VERTEX_FLOATS = 13;
+constexpr int BLOCK_GRASS = 1;
+constexpr int BLOCK_OAK_LEAVES = 7;
+
+struct BiomeColorMap {
+    std::vector<unsigned char> pixels;
+    int width = 0;
+    int height = 0;
+    glm::vec3 fallback = glm::vec3(1.0f);
+    bool loaded() const { return !pixels.empty() && width > 0 && height > 0; }
+};
+
+BiomeColorMap grassColorMap;
+BiomeColorMap foliageColorMap;
+unsigned int grassSideOverlayTexture = 0;
+
 struct Slider {
     float relX, relY;      // Относительные координаты центра (0-1)
     float relW, relH;      // Относительные размеры
@@ -153,12 +169,16 @@ void playRandomAmbientSound();
 void renderSingleBlockModel(int blockType);
 void renderItemIconFlat(int itemId, int screenX, int screenY, int size, int screenW, int screenH);
 void initCloudLayer();
+void initCelestialBodies();
+void renderCelestialBodies(float currentTime, const glm::vec3& sunDir);
 
 void initPlayerRenderer();
 void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float currentTime);
 void updateGameplayCamera();
 void renderCloudLayer(float currentTime);
 void renderRainLayer(float currentTime);
+void initBiomeColorAssets();
+glm::vec3 getBiomeTintColor(int wx, int wz, bool foliage);
 void addFaceToVertices(std::vector<float>& verts, 
     glm::vec3 v1, glm::vec3 v2, glm::vec3 v3, glm::vec3 v4,
     glm::vec3 normal, float uOffset);
@@ -380,7 +400,7 @@ std::unordered_map<int, BlockType> blockTypes;
 // Если id не указан здесь, transparent берётся из blocks.json и ведёт себя как стекло:
 // свет проходит, но внутренние грани между одинаковыми alpha-блоками скрываются.
 const std::unordered_set<int> codeAlphaBlocks = {
-    7 // oak_leaves
+    BLOCK_OAK_LEAVES // oak_leaves
 };
 
 int currentBlockType = 1;
@@ -804,60 +824,67 @@ void initWorldNoise() {
     int seed = currentWorldSeed;
     
     continentNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    continentNoise.SetFrequency(0.0008f);
+    continentNoise.SetFrequency(0.0016f);
     continentNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    continentNoise.SetFractalOctaves(6);
+    continentNoise.SetFractalOctaves(5);
     continentNoise.SetFractalLacunarity(2.0f);
-    continentNoise.SetFractalGain(0.5f);
+    continentNoise.SetFractalGain(0.50f);
     continentNoise.SetSeed(seed);
 
     erosionNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    erosionNoise.SetFrequency(0.008f);
+    erosionNoise.SetFrequency(0.0065f);
+    erosionNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     erosionNoise.SetFractalOctaves(4);
-    erosionNoise.SetFractalGain(0.5f);
+    erosionNoise.SetFractalGain(0.48f);
     erosionNoise.SetSeed(seed + 1);
 
     mountainNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    mountainNoise.SetFrequency(0.004f);
-    mountainNoise.SetFractalOctaves(7);
-    mountainNoise.SetFractalGain(0.6f);
-    mountainNoise.SetFractalLacunarity(2.2f);
+    mountainNoise.SetFrequency(0.0024f);
+    mountainNoise.SetFractalType(FastNoiseLite::FractalType_Ridged);
+    mountainNoise.SetFractalOctaves(4);
+    mountainNoise.SetFractalGain(0.42f);
+    mountainNoise.SetFractalLacunarity(1.90f);
     mountainNoise.SetSeed(seed + 2);
 
     riverNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    riverNoise.SetFrequency(0.02f);
-    riverNoise.SetFractalOctaves(2);
+    riverNoise.SetFrequency(0.006f);
+    riverNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
+    riverNoise.SetFractalOctaves(3);
     riverNoise.SetSeed(seed + 3);
 
     biomeTempNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    biomeTempNoise.SetFrequency(0.0006f);
+    biomeTempNoise.SetFrequency(0.0011f);
+    biomeTempNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     biomeTempNoise.SetFractalOctaves(3);
     biomeTempNoise.SetSeed(seed + 4);
     
     biomeHumidNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    biomeHumidNoise.SetFrequency(0.0006f);
+    biomeHumidNoise.SetFrequency(0.0011f);
+    biomeHumidNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     biomeHumidNoise.SetFractalOctaves(3);
     biomeHumidNoise.SetSeed(seed + 5);
 
     detailNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    detailNoise.SetFrequency(0.04f);
+    detailNoise.SetFrequency(0.045f);
+    detailNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     detailNoise.SetFractalOctaves(3);
     detailNoise.SetSeed(seed + 6);
 
     treeNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    treeNoise.SetFrequency(0.08f);
+    treeNoise.SetFrequency(0.12f);
     treeNoise.SetSeed(seed + 7);
 
     seaLevelNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    seaLevelNoise.SetFrequency(0.0003f);
+    seaLevelNoise.SetFrequency(0.0018f);
     seaLevelNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    seaLevelNoise.SetFractalOctaves(4);
+    seaLevelNoise.SetFractalOctaves(3);
     seaLevelNoise.SetFractalLacunarity(2.0f);
     seaLevelNoise.SetFractalGain(0.5f);
     seaLevelNoise.SetSeed(seed + 8);
 
     transitionNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    transitionNoise.SetFrequency(0.002f);
+    transitionNoise.SetFrequency(0.004f);
+    transitionNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     transitionNoise.SetFractalOctaves(2);
     transitionNoise.SetSeed(seed + 9);
 }
@@ -1205,65 +1232,88 @@ void smoothSkyLightHorizontally(ChunkData& chunk) {
 // Генерация мира с освещением
 // ----------------------------------------------------------------------
 float getHeightAt(int wx, int wz, float& outBiomeTemp, float& outBiomeHumid, float& outWaterLevel) {
-    outBiomeTemp = biomeTempNoise.GetNoise((float)wx, (float)wz);
-    outBiomeHumid = biomeHumidNoise.GetNoise((float)wx, (float)wz);
+    outBiomeTemp = biomeTempNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
+    outBiomeHumid = biomeHumidNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
 
-    float continent = continentNoise.GetNoise((float)wx, (float)wz);
-    float seaNoise = seaLevelNoise.GetNoise((float)wx, (float)wz);
-    outWaterLevel = 62.0f + seaNoise;
-    outWaterLevel = glm::clamp(outWaterLevel, 45.0f, 75.0f);
+    constexpr float BASE_SEA_LEVEL = 62.0f;
+    float seaNoise = seaLevelNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
+    outWaterLevel = glm::clamp(BASE_SEA_LEVEL + seaNoise * 1.5f, 58.0f, 65.0f);
 
-    float t = (continent + 1.0f) * 0.5f;
-    t = glm::smoothstep(0.0f, 1.0f, t);
-    
-    float minHeightOffset = -12.0f;
-    float maxHeightOffset = 40.0f;
-    float heightOffset = glm::mix(minHeightOffset, maxHeightOffset, t);
-    
-    float mountain = 0.0f;
-    if (continent > 0.35f) {
-        float mountainFactor = (continent - 0.35f) / 0.65f;
-        mountain = mountainNoise.GetNoise((float)wx, (float)wz) * 18.0f * mountainFactor;
+    float continental = continentNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
+    float continent = glm::smoothstep(0.24f, 0.78f, (continental + 1.0f) * 0.5f);
+    float oceanMask = 1.0f - continent;
+
+    float erosion = (erosionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
+    float roughness = glm::smoothstep(0.56f, 0.94f, erosion);
+    float flatness = 1.0f - roughness;
+
+    float temp01 = (outBiomeTemp + 1.0f) * 0.5f;
+    float humid01 = (outBiomeHumid + 1.0f) * 0.5f;
+    float dryPlains = glm::smoothstep(0.45f, 0.85f, temp01) * (1.0f - glm::smoothstep(0.25f, 0.60f, humid01));
+
+    float plainsDetail = detailNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) * 1.8f;
+    float rollingHills = erosionNoise.GetNoise(static_cast<float>(wx) + 311.0f, static_cast<float>(wz) - 97.0f) * 4.2f;
+    float ridge = (mountainNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
+    float mountainMask = continent
+        * glm::smoothstep(0.72f, 0.96f, erosion)
+        * glm::smoothstep(0.70f, 0.92f, ridge);
+    mountainMask = mountainMask * mountainMask * (3.0f - 2.0f * mountainMask);
+    float mountainHeight = mountainMask * (10.0f + ridge * ridge * 20.0f);
+
+    float baseLand = outWaterLevel + glm::mix(-18.0f, 7.0f, continent);
+    float height = baseLand;
+    height += flatness * plainsDetail;
+    height += roughness * rollingHills;
+    height += dryPlains * 1.5f;
+    height += mountainHeight;
+
+    // Oceans should have broad shallow shelves and deeper basins instead of random pits.
+    float oceanFloor = outWaterLevel - glm::mix(5.0f, 22.0f, oceanMask);
+    height = glm::mix(height, oceanFloor + plainsDetail * 0.7f, glm::smoothstep(0.45f, 0.88f, oceanMask));
+
+    // Long low-frequency river lines carve down toward sea level on land.
+    float river = std::abs(riverNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)));
+    float riverBed = outWaterLevel - 2.2f;
+    float riverMask = continent * (1.0f - mountainMask) * (1.0f - glm::smoothstep(0.030f, 0.115f, river));
+    if (riverMask > 0.0f) {
+        float bankBlend = glm::smoothstep(0.0f, 1.0f, riverMask);
+        height = glm::mix(height, std::min(height, riverBed), bankBlend);
     }
 
-    float erosion = erosionNoise.GetNoise((float)wx, (float)wz) * 4.0f;
-    float detail = detailNoise.GetNoise((float)wx, (float)wz) * 1.5f;
+    height += transitionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) * glm::mix(0.35f, 1.15f, roughness);
 
-    float river = riverNoise.GetNoise((float)wx, (float)wz);
-    float riverFactor = 0.0f;
-    if (std::abs(river) < 0.15f) {
-        float dist = 1.0f - (std::abs(river) / 0.15f);
-        riverFactor = -6.0f * dist * dist;
-    }
-
-    float height = outWaterLevel + heightOffset + mountain + erosion + detail + riverFactor;
-
-    float minH = 1.0f;
-    float maxH = CHUNK_SIZE_Y - 8.0f;
-    if (height < minH) height = minH + (height - minH) * 0.5f;
-    if (height > maxH) height = maxH - (maxH - height) * 0.5f;
-    height = glm::clamp(height, minH, maxH);
-
-    return height;
+    const float minH = 3.0f;
+    const float maxH = CHUNK_SIZE_Y - 9.0f;
+    return glm::clamp(height, minH, maxH);
 }
 
-int getBiome(float temp, float humid, float height, float waterLevel) {
-    if (height <= waterLevel) {
-        float depth = waterLevel - height;
-        if (depth < 2.0f) return 6;
-        if (depth < 8.0f) return 4;
-        return 5;
-    }
-    if (height - waterLevel < 3.0f) return 6;
+enum BiomeId {
+    BIOME_PLAINS = 0,
+    BIOME_FOREST = 1,
+    BIOME_MOUNTAINS = 2,
+    BIOME_RIVER = 3,
+    BIOME_OCEAN = 4,
+    BIOME_DEEP_OCEAN = 5,
+    BIOME_BEACH = 6,
+    BIOME_STONY_PEAKS = 7,
+    BIOME_DESERT = 8
+};
 
+int getBiome(float temp, float humid, float height, float waterLevel) {
     float t = (temp + 1.0f) * 0.5f;
     float h = (humid + 1.0f) * 0.5f;
+    float depth = waterLevel - height;
 
-    if (t < 0.2f) return 7;
-    if (t > 0.7f && h > 0.5f) return 1;
-    if (h < 0.3f) return 8;
-    if (height > waterLevel + 25.0f) return 2;
-    return 0;
+    if (depth > 8.5f) return BIOME_DEEP_OCEAN;
+    if (depth > 3.0f) return BIOME_OCEAN;
+    if (depth > 1.0f) return BIOME_RIVER;
+    if (std::abs(height - waterLevel) < 2.5f) return BIOME_BEACH;
+
+    if (height > waterLevel + 42.0f) return BIOME_STONY_PEAKS;
+    if (height > waterLevel + 29.0f) return BIOME_MOUNTAINS;
+    if (t > 0.62f && h < 0.36f) return BIOME_DESERT;
+    if (h > 0.56f && t > 0.24f) return BIOME_FOREST;
+    return BIOME_PLAINS;
 }
 
 bool isTreeNearby(int lx, int lz, int surfaceY, const std::vector<int>& blocks) {
@@ -1280,10 +1330,10 @@ bool isTreeNearby(int lx, int lz, int surfaceY, const std::vector<int>& blocks) 
     return false;
 }
 
-void addTree(int cx, int cz, int lx, int lz, int surfaceY, std::vector<int>& blocks) {
+void addTree(int cx, int cz, int lx, int lz, int surfaceY, std::vector<int>& blocks, float treeThreshold = 0.65f) {
     int worldX = cx * CHUNK_SIZE_X + lx, worldZ = cz * CHUNK_SIZE_Z + lz;
     float treeRand = treeNoise.GetNoise((float)worldX, (float)worldZ);
-    if (treeRand < 0.65f) return;
+    if (treeRand < treeThreshold) return;
 
     // Дерево должно целиком помещаться в чанке, иначе на границе крона обрежется.
     constexpr int TREE_EDGE_MARGIN = 2;
@@ -1390,21 +1440,21 @@ std::shared_ptr<ChunkData> generateChunk(int cx, int cz) {
             int surfaceY = (int)col.height, waterSurfaceY = (int)col.waterLevel, biome = col.biome;
             for (int y = 0; y < CHUNK_SIZE_Y; ++y) {
                 int blockId = 0;
-                if (biome == 3 || biome == 4 || biome == 5) {
-                    if (y == surfaceY) blockId = (biome == 5) ? 3 : 4;
+                if (biome == BIOME_RIVER || biome == BIOME_OCEAN || biome == BIOME_DEEP_OCEAN) {
+                    if (y == surfaceY) blockId = (biome == BIOME_DEEP_OCEAN) ? 3 : 4;
                     else if (y > surfaceY && y <= waterSurfaceY) blockId = 5;
                     else if (y < surfaceY) blockId = (y > surfaceY - 4) ? 4 : 3;
-                } else if (biome == 6) {
+                } else if (biome == BIOME_BEACH) {
                     if (y == surfaceY) blockId = 4;
                     else if (y < surfaceY) blockId = (y > surfaceY - 3) ? 4 : 3;
                 } else {
                     if (y == surfaceY) {
-                        if (biome == 2 || biome == 7) blockId = 3;
-                        else if (biome == 8) blockId = 4;
+                        if (biome == BIOME_MOUNTAINS || biome == BIOME_STONY_PEAKS) blockId = 3;
+                        else if (biome == BIOME_DESERT) blockId = 4;
                         else blockId = 1;
                     } else if (y > surfaceY - 4 && y < surfaceY) {
-                        if (biome == 2 || biome == 7) blockId = 3;
-                        else if (biome == 8) blockId = 4;
+                        if (biome == BIOME_MOUNTAINS || biome == BIOME_STONY_PEAKS) blockId = 3;
+                        else if (biome == BIOME_DESERT) blockId = 4;
                         else blockId = 2;
                     } else if (y < surfaceY - 4) blockId = 3;
                 }
@@ -1440,8 +1490,10 @@ std::shared_ptr<ChunkData> generateChunk(int cx, int cz) {
             int surfaceY = (int)col.height;
             int waterSurfaceY = (int)col.waterLevel;
             int biome = col.biome;
-            if ((biome == 0 || biome == 1) && surfaceY > waterSurfaceY + 2)
-                addTree(cx, cz, x, z, surfaceY, data->blocks);
+            if ((biome == BIOME_PLAINS || biome == BIOME_FOREST) && surfaceY > waterSurfaceY + 2) {
+                float treeThreshold = (biome == BIOME_FOREST) ? 0.42f : 0.82f;
+                addTree(cx, cz, x, z, surfaceY, data->blocks, treeThreshold);
+            }
         }
 
     for (int x = 0; x < CHUNK_SIZE_X; ++x) {
@@ -1532,8 +1584,11 @@ void workerFunction() {
 unsigned int shaderProgram, reticleProgram, reticleVAO;
 unsigned int cloudTexture = 0, cloudVAO = 0, cloudVBO = 0;
 unsigned int rainTexture = 0, rainVAO = 0, rainVBO = 0;
+unsigned int sunTexture = 0, moonPhasesTexture = 0, celestialVAO = 0, celestialVBO = 0;
+int currentMoonPhase = 0;
+bool moonWasBelowWorld = false;
 bool isRaining = false;
-int u_time_location, u_isWater_location, u_isRain_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location;
+int u_time_location, u_isWater_location, u_isRain_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location, u_useBiomeTint_location;
 
 struct Chunk;
 std::unordered_map<glm::ivec2, Chunk, hash_ivec2> loadedChunks;
@@ -2010,6 +2065,62 @@ unsigned int loadUITexture(const char* path) {
         stbi_image_free(data);
     } else std::cerr << "Failed to load UI texture: " << path << std::endl;
     return tex;
+}
+
+bool loadBiomeColorMap(const char* path, BiomeColorMap& map, const glm::vec3& fallback) {
+    map = BiomeColorMap{};
+    map.fallback = fallback;
+
+    int w = 0, h = 0, ch = 0;
+    unsigned char* data = stbi_load(path, &w, &h, &ch, 4);
+    if (!data) {
+        std::cerr << "Failed to load biome colormap: " << path << std::endl;
+        return false;
+    }
+
+    map.width = w;
+    map.height = h;
+    map.pixels.assign(data, data + static_cast<size_t>(w) * h * 4);
+    stbi_image_free(data);
+    return true;
+}
+
+void initBiomeColorAssets() {
+    loadBiomeColorMap("textures/colormap/grass.png", grassColorMap, glm::vec3(0.68f, 0.86f, 0.42f));
+    loadBiomeColorMap("textures/colormap/foliage.png", foliageColorMap, glm::vec3(0.55f, 0.78f, 0.34f));
+    grassSideOverlayTexture = loadUITexture("textures/blocks/grass_t.png");
+}
+
+glm::vec3 sampleColorMap(const BiomeColorMap& map, float temperature, float humidity) {
+    if (!map.loaded()) return map.fallback;
+
+    temperature = glm::clamp(temperature, 0.0f, 1.0f);
+    humidity = glm::clamp(humidity, 0.0f, 1.0f) * temperature;
+
+    const int x = std::clamp(static_cast<int>((1.0f - temperature) * (map.width - 1)), 0, map.width - 1);
+    const int y = std::clamp(static_cast<int>((1.0f - humidity) * (map.height - 1)), 0, map.height - 1);
+    const size_t idx = (static_cast<size_t>(y) * map.width + x) * 4;
+
+    return glm::vec3(
+        map.pixels[idx] / 255.0f,
+        map.pixels[idx + 1] / 255.0f,
+        map.pixels[idx + 2] / 255.0f
+    );
+}
+
+glm::vec3 getBiomeTintColor(int wx, int wz, bool foliage) {
+    float temp = (biomeTempNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
+    float humid = (biomeHumidNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
+    glm::vec3 tint = sampleColorMap(foliage ? foliageColorMap : grassColorMap, temp, humid);
+
+    // The Minecraft colormaps are meant to tint gray source textures, but with our
+    // day/night lighting the raw colors look too dark in common plains/forest areas.
+    // Lift the tint toward a brighter green while keeping biome differences visible.
+    const glm::vec3 vanillaLikeGreen = foliage ? glm::vec3(0.56f, 0.78f, 0.34f)
+                                               : glm::vec3(0.66f, 0.84f, 0.38f);
+    tint = glm::mix(tint, vanillaLikeGreen, foliage ? 0.20f : 0.30f);
+    tint = glm::mix(tint, glm::vec3(1.0f), foliage ? 0.08f : 0.12f);
+    return glm::clamp(tint, glm::vec3(0.0f), glm::vec3(1.0f));
 }
 
 uint32_t decodeNextUtf8Codepoint(const std::string& text, size_t& index) {
@@ -3284,6 +3395,8 @@ struct Chunk {
     std::shared_ptr<ChunkData> data;
     unsigned int vao[256] = {0}, vbo[256] = {0};
     size_t vertexCount[256] = {0};
+    unsigned int grassOverlayVAO = 0, grassOverlayVBO = 0;
+    size_t grassOverlayVertexCount = 0;
     bool meshReady = false, dirty = false;
     bool hasCutoutAlpha = false, hasBlendedAlpha = false;
 
@@ -3295,7 +3408,11 @@ struct Chunk {
             else pendingGen.insert(pos);
         } else pendingGen.insert(pos);
     }
-    ~Chunk() { for (int i=0; i<256; ++i) if (vao[i]) { glDeleteVertexArrays(1, &vao[i]); glDeleteBuffers(1, &vbo[i]); } }
+    ~Chunk() {
+        for (int i=0; i<256; ++i) if (vao[i]) { glDeleteVertexArrays(1, &vao[i]); glDeleteBuffers(1, &vbo[i]); }
+        if (grassOverlayVAO) glDeleteVertexArrays(1, &grassOverlayVAO);
+        if (grassOverlayVBO) glDeleteBuffers(1, &grassOverlayVBO);
+    }
 
     bool updateData() {
         if (data) return true;
@@ -3535,7 +3652,11 @@ struct Chunk {
         hasCutoutAlpha = false;
         hasBlendedAlpha = false;
         for (int i=0; i<256; ++i) if (vao[i]) { glDeleteVertexArrays(1, &vao[i]); glDeleteBuffers(1, &vbo[i]); vao[i]=vbo[i]=0; vertexCount[i]=0; }
+        if (grassOverlayVAO) { glDeleteVertexArrays(1, &grassOverlayVAO); grassOverlayVAO = 0; }
+        if (grassOverlayVBO) { glDeleteBuffers(1, &grassOverlayVBO); grassOverlayVBO = 0; }
+        grassOverlayVertexCount = 0;
         std::unordered_map<int, std::vector<float>> verticesPerType;
+        std::vector<float> grassOverlayVertices;
         const float leftFace[] = { -0.5f,-0.5f,-0.5f, -0.5f,-0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,-0.5f, -0.5f,-0.5f,-0.5f };
         const float rightFace[] = { 0.5f,-0.5f,0.5f, 0.5f,-0.5f,-0.5f, 0.5f,0.5f,-0.5f, 0.5f,0.5f,-0.5f, 0.5f,0.5f,0.5f, 0.5f,-0.5f,0.5f };
         const float bottomFace[] = { -0.5f,-0.5f,-0.5f, 0.5f,-0.5f,-0.5f, 0.5f,-0.5f,0.5f, 0.5f,-0.5f,0.5f, -0.5f,-0.5f,0.5f, -0.5f,-0.5f,-0.5f };
@@ -3609,12 +3730,38 @@ struct Chunk {
                 
                 float uOff, uScale;
                 getUVForFace(faceIdx, uOff, uScale);
+
+                const bool isGrassTop = (type == BLOCK_GRASS && faceIdx == 3);
+                const bool isGrassSide = (type == BLOCK_GRASS && faceIdx != 2 && faceIdx != 3);
+                const bool isFoliage = (type == BLOCK_OAK_LEAVES);
+                const glm::vec3 biomeColor = (isGrassTop || isGrassSide || isFoliage)
+                    ? getBiomeTintColor(static_cast<int>(ox), static_cast<int>(oz), isFoliage)
+                    : glm::vec3(1.0f);
+                const glm::vec3 faceTint = (isGrassTop || isFoliage) ? biomeColor : glm::vec3(1.0f);
+
+                auto pushVertex = [&](std::vector<float>& target, int i, float texU, float texV, const glm::vec3& tint, float normalOffset) {
+                    glm::vec3 vertexOffset(face[i], face[i+1], face[i+2]);
+                    target.push_back(face[i] + ox + normal.x * normalOffset);
+                    target.push_back(face[i+1] + oy + normal.y * normalOffset);
+                    target.push_back(face[i+2] + oz + normal.z * normalOffset);
+                    target.push_back(texU);
+                    target.push_back(texV);
+                    target.push_back(normal.x);
+                    target.push_back(normal.y);
+                    target.push_back(normal.z);
+
+                    float light = getVertexLight(x, y, z, normal, vertexOffset, faceNeighborOffsets[faceIdx]);
+                    float blockLight = (type == 5)
+                        ? getWaterDepthFactor(x, y, z)
+                        : getVertexBlockLight(x, y, z, normal, vertexOffset, faceNeighborOffsets[faceIdx]);
+                    target.push_back(light);
+                    target.push_back(blockLight);
+                    target.push_back(tint.r);
+                    target.push_back(tint.g);
+                    target.push_back(tint.b);
+                };
                 
                 for (int i=0; i<18; i+=3) {
-                    out.push_back(face[i]+ox); 
-                    out.push_back(face[i+1]+oy); 
-                    out.push_back(face[i+2]+oz);
-                    
                     int uvIdx = (i/3)*2; 
                     float u = baseUV[uvIdx], v = baseUV[uvIdx+1];
                     
@@ -3623,19 +3770,10 @@ struct Chunk {
                         v = 1.0f - v;
                     }
                     
-                    out.push_back(uOff + u * uScale);
-                    out.push_back(v);
-                    out.push_back(normal.x); 
-                    out.push_back(normal.y); 
-                    out.push_back(normal.z);
-                    
-                    glm::vec3 vertexOffset(face[i], face[i+1], face[i+2]);
-                    float light = getVertexLight(x, y, z, normal, vertexOffset, faceNeighborOffsets[faceIdx]);
-                    float blockLight = (type == 5)
-                        ? getWaterDepthFactor(x, y, z)
-                        : getVertexBlockLight(x, y, z, normal, vertexOffset, faceNeighborOffsets[faceIdx]);
-                    out.push_back(light);
-                    out.push_back(blockLight);
+                    pushVertex(out, i, uOff + u * uScale, v, faceTint, 0.0f);
+                    if (isGrassSide && grassSideOverlayTexture != 0) {
+                        pushVertex(grassOverlayVertices, i, u, v, biomeColor, 0.002f);
+                    }
                 }
             };
             
@@ -3673,16 +3811,31 @@ struct Chunk {
             glGenVertexArrays(1, &vao[type]); glGenBuffers(1, &vbo[type]);
             glBindVertexArray(vao[type]); glBindBuffer(GL_ARRAY_BUFFER, vbo[type]);
             glBufferData(GL_ARRAY_BUFFER, verts.size()*sizeof(float), verts.data(), GL_STATIC_DRAW);
-            glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)0); glEnableVertexAttribArray(0);
-            glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(3*sizeof(float))); glEnableVertexAttribArray(1);
-            glVertexAttribPointer(2,3,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(5*sizeof(float))); glEnableVertexAttribArray(2);
-            glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
-            glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,10*sizeof(float),(void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
-            vertexCount[type] = verts.size() / 10;
+            glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)0); glEnableVertexAttribArray(0);
+            glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)(3*sizeof(float))); glEnableVertexAttribArray(1);
+            glVertexAttribPointer(2,3,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)(5*sizeof(float))); glEnableVertexAttribArray(2);
+            glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
+            glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
+            glVertexAttribPointer(5,3,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)(10*sizeof(float))); glEnableVertexAttribArray(5);
+            vertexCount[type] = verts.size() / WORLD_VERTEX_FLOATS;
             if (isAlphaBlock(type)) {
                 if (blockDrawsSameAlphaFaces[type]) hasCutoutAlpha = true;
                 else hasBlendedAlpha = true;
             }
+        }
+        if (!grassOverlayVertices.empty()) {
+            glGenVertexArrays(1, &grassOverlayVAO);
+            glGenBuffers(1, &grassOverlayVBO);
+            glBindVertexArray(grassOverlayVAO);
+            glBindBuffer(GL_ARRAY_BUFFER, grassOverlayVBO);
+            glBufferData(GL_ARRAY_BUFFER, grassOverlayVertices.size()*sizeof(float), grassOverlayVertices.data(), GL_STATIC_DRAW);
+            glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)0); glEnableVertexAttribArray(0);
+            glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)(3*sizeof(float))); glEnableVertexAttribArray(1);
+            glVertexAttribPointer(2,3,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)(5*sizeof(float))); glEnableVertexAttribArray(2);
+            glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
+            glVertexAttribPointer(4,1,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)(9*sizeof(float))); glEnableVertexAttribArray(4);
+            glVertexAttribPointer(5,3,GL_FLOAT,GL_FALSE,WORLD_VERTEX_FLOATS*sizeof(float),(void*)(10*sizeof(float))); glEnableVertexAttribArray(5);
+            grassOverlayVertexCount = grassOverlayVertices.size() / WORLD_VERTEX_FLOATS;
         }
         meshReady = true;
         alphaChunksCacheValid = false;
@@ -3691,6 +3844,7 @@ struct Chunk {
 
     void render() {
         if (!data || !meshReady) return;
+        glUniform1i(u_useBiomeTint_location, 1);
         for (int type=0; type<256; ++type) {
             if (type==5 || !vao[type] || isAlphaBlock(type)) continue;
             auto it = blockTypes.find(type); if (it==blockTypes.end()) continue;
@@ -3699,8 +3853,19 @@ struct Chunk {
             glBindVertexArray(vao[type]); glDrawArrays(GL_TRIANGLES, 0, vertexCount[type]);
         }
     }
+
+    void renderGrassOverlay() {
+        if (!meshReady || !grassOverlayVAO || !grassSideOverlayTexture || grassOverlayVertexCount == 0) return;
+        glUniform1i(u_useBiomeTint_location, 1);
+        glUniform1i(u_isWater_location, 0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, grassSideOverlayTexture);
+        glBindVertexArray(grassOverlayVAO);
+        glDrawArrays(GL_TRIANGLES, 0, grassOverlayVertexCount);
+    }
     void renderAlphaBlocks(bool drawSameTypeFacesPass) {
         if (!data || !meshReady) return;
+        glUniform1i(u_useBiomeTint_location, 1);
         for (int type=0; type<256; ++type) {
             if (type==5 || !vao[type] || !isAlphaBlock(type)) continue;
             if (blockDrawsSameAlphaFaces[type] != drawSameTypeFacesPass) continue;
@@ -3713,6 +3878,7 @@ struct Chunk {
     void renderWater() {
         if (!meshReady || !vao[5]) return;
         glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glDepthMask(GL_FALSE);
+        glUniform1i(u_useBiomeTint_location, 0);
         glUniform1i(u_isWater_location, 1);
         glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, blockTypes[5].textureID);
         glBindVertexArray(vao[5]); glDrawArrays(GL_TRIANGLES, 0, vertexCount[5]);
@@ -4214,6 +4380,7 @@ bool areChunksReady();
 
 
 void renderSingleBlockModel(int blockType) {
+    glUniform1i(u_useBiomeTint_location, 0);
     static std::unordered_map<int, unsigned int> singleBlockVAO;
     static std::unordered_map<int, unsigned int> singleBlockVBO;
     static std::unordered_map<int, size_t> singleBlockVertexCount;
@@ -5536,6 +5703,7 @@ void initPlayerRenderer() {
 
 void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float currentTime) {
     (void)currentTime;
+    glUniform1i(u_useBiomeTint_location, 0);
     static float bodyYaw = 0.0f;
 
     (void)lookDir;
@@ -5719,12 +5887,24 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glUniform1f(u_sunIntensity_location, sunIntensity);
     glUniform1f(u_ambientBase_location, ambientBase);
     glUniform1i(u_isRain_location, 0);
+    renderCelestialBodies(currentTime, sunDir);
+    glUniform3fv(u_sunDir_location, 1, glm::value_ptr(sunDir));
+    glUniform1f(u_sunIntensity_location, sunIntensity);
+    glUniform1f(u_ambientBase_location, ambientBase);
     renderCloudLayer(currentTime);
     renderRainLayer(currentTime);
 
     // Рендер всех чанков
     for (auto& p : loadedChunks)
         p.second.render();
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    for (auto& p : loadedChunks)
+        p.second.renderGrassOverlay();
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
 
     // Листва и другие code-alpha блоки — cutout: рисуем с записью в depth-buffer.
     // Так вода/дальние блоки не просвечивают и не накладываются поверх ближней листвы.
@@ -5844,8 +6024,131 @@ void initCloudLayer() {
     glGenBuffers(1, &rainVBO);
 }
 
+void initCelestialBodies() {
+    sunTexture = loadUITexture("textures/environment/sun.png");
+    moonPhasesTexture = loadUITexture("textures/environment/moon_phases.png");
+
+    glGenVertexArrays(1, &celestialVAO);
+    glGenBuffers(1, &celestialVBO);
+    glBindVertexArray(celestialVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, celestialVBO);
+    glBufferData(GL_ARRAY_BUFFER, 6 * 10 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(5 * sizeof(float))); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(8 * sizeof(float))); glEnableVertexAttribArray(3);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(9 * sizeof(float))); glEnableVertexAttribArray(4);
+    glBindVertexArray(0);
+}
+
+void renderCelestialBillboard(const glm::vec3& direction, float size, unsigned int texture,
+                              float u0, float v0, float u1, float v1) {
+    if (!celestialVAO || !celestialVBO || !texture) return;
+
+    glm::vec3 dir = direction;
+    if (!std::isfinite(dir.x) || !std::isfinite(dir.y) || !std::isfinite(dir.z) || glm::length(dir) < 0.001f) return;
+    dir = glm::normalize(dir);
+
+    // Keep one billboard axis fixed in world space so the sun/moon texture does not roll
+    // while it moves along the sky arc. The day/night direction is constrained to the X/Y
+    // plane, so world Z is always perpendicular to it and keeps the quad centered overhead.
+    const glm::vec3 right(0.0f, 0.0f, 1.0f);
+    glm::vec3 up = glm::normalize(glm::cross(right, dir));
+
+    const float distance = 640.0f;
+    const glm::vec3 center = renderCameraPos + dir * distance;
+    const glm::vec3 r = right * (size * 0.5f);
+    const glm::vec3 u = up * (size * 0.5f);
+    const glm::vec3 normal(0.0f, 1.0f, 0.0f);
+
+    auto pushVertex = [](std::vector<float>& verts, const glm::vec3& pos, float uCoord, float vCoord, const glm::vec3& n) {
+        verts.push_back(pos.x); verts.push_back(pos.y); verts.push_back(pos.z);
+        verts.push_back(uCoord); verts.push_back(vCoord);
+        verts.push_back(n.x); verts.push_back(n.y); verts.push_back(n.z);
+        verts.push_back(1.0f); // full sky light: the sun/moon texture is not darkened by world lighting
+        verts.push_back(0.0f);
+    };
+
+    std::vector<float> verts;
+    verts.reserve(6 * 10);
+    glm::vec3 a = center - r + u;
+    glm::vec3 b = center + r + u;
+    glm::vec3 c = center + r - u;
+    glm::vec3 d = center - r - u;
+    pushVertex(verts, a, u0, v0, normal);
+    pushVertex(verts, b, u1, v0, normal);
+    pushVertex(verts, c, u1, v1, normal);
+    pushVertex(verts, c, u1, v1, normal);
+    pushVertex(verts, d, u0, v1, normal);
+    pushVertex(verts, a, u0, v0, normal);
+
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glBindVertexArray(celestialVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, celestialVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, verts.size() * sizeof(float), verts.data());
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+}
+
+void updateMoonPhaseForCycle(const glm::vec3& moonDir) {
+    const bool moonBelowWorld = moonDir.y < -0.02f;
+    if (moonBelowWorld && !moonWasBelowWorld) {
+        currentMoonPhase = (currentMoonPhase + 1) % 8;
+    }
+    moonWasBelowWorld = moonBelowWorld;
+}
+
+void renderCelestialBodies(float currentTime, const glm::vec3& sunDir) {
+    (void)currentTime;
+    glUniform1i(u_useBiomeTint_location, 0);
+    if (!celestialVAO || (!sunTexture && !moonPhasesTexture)) return;
+
+    glm::vec3 moonDir = -sunDir;
+    updateMoonPhaseForCycle(moonDir);
+
+    GLboolean depthEnabled = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean cullEnabled = glIsEnabled(GL_CULL_FACE);
+    GLboolean blendEnabled = glIsEnabled(GL_BLEND);
+    GLboolean previousDepthMask = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+
+    if (depthEnabled) glDisable(GL_DEPTH_TEST);
+    if (cullEnabled) glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    // Minecraft-style sun/moon textures often keep a black RGB background instead of alpha.
+    // Additive blending makes that black background invisible while preserving RGBA textures too.
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+
+    glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, glm::value_ptr(glm::mat4(1.0f)));
+    glUniform1i(u_isWater_location, 0);
+    glUniform1i(u_isRain_location, 0);
+    glUniform1i(u_useBiomeTint_location, 0);
+    glUniform1f(u_sunIntensity_location, 1.0f);
+    glUniform1f(u_ambientBase_location, 1.0f);
+    glActiveTexture(GL_TEXTURE0);
+
+    renderCelestialBillboard(sunDir, 128.8f, sunTexture, 0.0f, 0.0f, 1.0f, 1.0f);
+
+    const int phase = std::clamp(currentMoonPhase, 0, 7);
+    const int col = phase % 4;
+    const int row = phase / 4;
+    const float u0 = col * 0.25f;
+    const float v0 = row * 0.5f;
+    const float u1 = u0 + 0.25f;
+    const float v1 = v0 + 0.5f;
+    renderCelestialBillboard(moonDir, 100.8f, moonPhasesTexture, u0, v0, u1, v1);
+
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    if (!blendEnabled) glDisable(GL_BLEND);
+    glDepthMask(previousDepthMask);
+    if (depthEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (cullEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+}
+
 void renderCloudLayer(float currentTime) {
     if (!cloudVAO || !cloudTexture) return;
+    glUniform1i(u_useBiomeTint_location, 0);
     const float cloudSpeed = 0.45f;
     glm::mat4 cloudModel = glm::translate(glm::mat4(1.0f), glm::vec3(currentTime * cloudSpeed, 0.0f, 0.0f));
     glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, glm::value_ptr(cloudModel));
@@ -5863,6 +6166,7 @@ void renderCloudLayer(float currentTime) {
 
 void renderRainLayer(float currentTime) {
     if (!isRaining || !rainTexture || !rainVAO || !rainVBO) return;
+    glUniform1i(u_useBiomeTint_location, 0);
 
     const float rainRadius = 30.0f;
     const float gridSize = 1.0f;
@@ -6246,8 +6550,9 @@ layout (location = 1) in vec2 aTexCoord;
 layout (location = 2) in vec3 aNormal;
 layout (location = 3) in float aLight;
 layout (location = 4) in float aBlockLight;
-out vec2 TexCoord; out vec3 FragPos; out vec3 Normal; out float LightLevel; out float BlockLightLevel;
-uniform mat4 model; uniform mat4 view; uniform mat4 projection;
+layout (location = 5) in vec3 aBiomeTint;
+out vec2 TexCoord; out vec3 FragPos; out vec3 Normal; out float LightLevel; out float BlockLightLevel; out vec3 BiomeTint;
+uniform mat4 model; uniform mat4 view; uniform mat4 projection; uniform int u_useBiomeTint;
 void main() {
     vec4 worldPos = model * vec4(aPos, 1.0);
     gl_Position = projection * view * worldPos;
@@ -6255,6 +6560,7 @@ void main() {
     Normal = mat3(transpose(inverse(model))) * aNormal;
     LightLevel = aLight;
     BlockLightLevel = aBlockLight;
+    BiomeTint = (u_useBiomeTint == 1) ? aBiomeTint : vec3(1.0);
 }
 )";
 const char *fragmentShaderSource = R"(
@@ -6262,7 +6568,7 @@ const char *fragmentShaderSource = R"(
 in vec2 TexCoord; out vec4 FragColor;
 uniform sampler2D ourTexture; uniform float u_time; uniform int u_isWater; uniform int u_isRain;
 uniform vec3 u_sunDir; uniform float u_sunIntensity; uniform float u_ambientBase;
-in vec3 FragPos; in vec3 Normal; in float LightLevel; in float BlockLightLevel;
+in vec3 FragPos; in vec3 Normal; in float LightLevel; in float BlockLightLevel; in vec3 BiomeTint;
 void main() {
     vec2 uv = TexCoord;
     if (u_isWater == 1) {
@@ -6271,6 +6577,7 @@ void main() {
         uv.y = uv.y / frames + floor(frame) / frames;
     }
     vec4 color = texture(ourTexture, uv);
+    color.rgb *= BiomeTint;
     if (u_isWater==1) {
         float depthFactor = clamp(BlockLightLevel, 0.0, 1.0);
         vec3 shallowTint = vec3(0.28, 0.52, 0.72);
@@ -6323,7 +6630,9 @@ void checkProgramErrors(unsigned int p) { int ok; glGetProgramiv(p,GL_LINK_STATU
 void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb, glm::vec3& sky) {
     float cycle = fmod(t, FULL_CYCLE_SECONDS) / FULL_CYCLE_SECONDS;
     float angle = cycle * glm::two_pi<float>() - glm::half_pi<float>();
-    sunDir = glm::normalize(glm::vec3(cos(angle), sin(angle), 0.35f));
+    // Vertical east/west sky arc: no constant Z offset, so the sun and moon pass
+    // directly over the world instead of sliding along the side of the sky.
+    sunDir = glm::normalize(glm::vec3(cos(angle), sin(angle), 0.0f));
     float daylight = glm::clamp(sunDir.y * 1.15f + 0.15f, 0.0f, 1.0f);
     daylight = daylight * daylight * (3.0f - 2.0f*daylight);
     sunInt = 0.05f + daylight * 0.95f;
@@ -6378,16 +6687,20 @@ int main() {
     u_sunDir_location = glGetUniformLocation(shaderProgram,"u_sunDir");
     u_sunIntensity_location = glGetUniformLocation(shaderProgram,"u_sunIntensity");
     u_ambientBase_location = glGetUniformLocation(shaderProgram,"u_ambientBase");
+    u_useBiomeTint_location = glGetUniformLocation(shaderProgram,"u_useBiomeTint");
+    glUniform1i(u_useBiomeTint_location, 0);
     u_modelLoc = glGetUniformLocation(shaderProgram,"model");
     u_viewLoc = glGetUniformLocation(shaderProgram,"view");
     u_projLoc = glGetUniformLocation(shaderProgram,"projection");
 
     if (!loadBlockConfig("blocks.json")) return -1;
     if (!loadItemConfig("items.json")) return -1;
+    initBiomeColorAssets();
     initUI(); loadMenuTextures(); loadHUDTextures(); initLanguageMenu();
     loadSliderTextures();
     initFOVSlider(optionsSliders);
     initCloudLayer();
+    initCelestialBodies();
     initPlayerRenderer();
     if (fs::exists("sounds/hurtflesh1.ogg")) {
         soundManager.loadPlayerSound("hurt", "sounds/hurtflesh1.ogg");
@@ -6542,8 +6855,13 @@ int main() {
     if (cloudVAO) glDeleteVertexArrays(1, &cloudVAO);
     if (cloudVBO) glDeleteBuffers(1, &cloudVBO);
     if (rainTexture) glDeleteTextures(1, &rainTexture);
+    if (sunTexture) glDeleteTextures(1, &sunTexture);
+    if (moonPhasesTexture) glDeleteTextures(1, &moonPhasesTexture);
+    if (grassSideOverlayTexture) glDeleteTextures(1, &grassSideOverlayTexture);
     if (rainVAO) glDeleteVertexArrays(1, &rainVAO);
     if (rainVBO) glDeleteBuffers(1, &rainVBO);
+    if (celestialVAO) glDeleteVertexArrays(1, &celestialVAO);
+    if (celestialVBO) glDeleteBuffers(1, &celestialVBO);
     glDeleteProgram(shaderProgram);
     glDeleteVertexArrays(1, &reticleVAO);
     glDeleteProgram(reticleProgram);

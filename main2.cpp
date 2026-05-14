@@ -5878,12 +5878,10 @@ void renderCelestialBillboard(const glm::vec3& direction, float size, unsigned i
     if (!std::isfinite(dir.x) || !std::isfinite(dir.y) || !std::isfinite(dir.z) || glm::length(dir) < 0.001f) return;
     dir = glm::normalize(dir);
 
-    glm::vec3 worldUp(0.0f, 1.0f, 0.0f);
-    glm::vec3 right = glm::cross(dir, worldUp);
-    if (glm::length(right) < 0.001f) {
-        right = glm::cross(dir, glm::vec3(0.0f, 0.0f, 1.0f));
-    }
-    right = glm::normalize(right);
+    // Keep one billboard axis fixed in world space so the sun/moon texture does not roll
+    // while it moves along the sky arc. The day/night direction is constrained to the X/Y
+    // plane, so world Z is always perpendicular to it and keeps the quad centered overhead.
+    const glm::vec3 right(0.0f, 0.0f, 1.0f);
     glm::vec3 up = glm::normalize(glm::cross(right, dir));
 
     const float distance = 640.0f;
@@ -6454,7 +6452,9 @@ void checkProgramErrors(unsigned int p) { int ok; glGetProgramiv(p,GL_LINK_STATU
 void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb, glm::vec3& sky) {
     float cycle = fmod(t, FULL_CYCLE_SECONDS) / FULL_CYCLE_SECONDS;
     float angle = cycle * glm::two_pi<float>() - glm::half_pi<float>();
-    sunDir = glm::normalize(glm::vec3(cos(angle), sin(angle), 0.35f));
+    // Vertical east/west sky arc: no constant Z offset, so the sun and moon pass
+    // directly over the world instead of sliding along the side of the sky.
+    sunDir = glm::normalize(glm::vec3(cos(angle), sin(angle), 0.0f));
     float daylight = glm::clamp(sunDir.y * 1.15f + 0.15f, 0.0f, 1.0f);
     daylight = daylight * daylight * (3.0f - 2.0f*daylight);
     sunInt = 0.05f + daylight * 0.95f;

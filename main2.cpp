@@ -183,6 +183,8 @@ void renderCloudLayer(float currentTime);
 void renderRainLayer(float currentTime);
 void initBiomeColorAssets();
 glm::vec3 getBiomeTintColor(int wx, int wz, bool foliage);
+bool isBiomeTintedGuiBlockFace(int blockType, int faceIdx, bool& foliage);
+glm::vec3 getGuiBiomeTintColor(bool foliage);
 void addFaceToVertices(std::vector<float>& verts, 
     glm::vec3 v1, glm::vec3 v2, glm::vec3 v3, glm::vec3 v4,
     glm::vec3 normal, float uOffset);
@@ -1605,7 +1607,7 @@ struct StarPoint {
 
 std::vector<StarPoint> starPoints;
 std::vector<float> starVertexData;
-int u_time_location, u_isWater_location, u_isRain_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location, u_useBiomeTint_location;
+int u_time_location, u_isWater_location, u_isRain_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location, u_useBiomeTint_location, u_guiBiomeTint_location;
 
 struct Chunk;
 std::unordered_map<glm::ivec2, Chunk, hash_ivec2> loadedChunks;
@@ -2145,6 +2147,27 @@ glm::vec3 getBiomeTintColor(int wx, int wz, bool foliage) {
         tint.r = std::max(tint.r, tint.g * 0.58f);
     }
     return glm::clamp(tint, glm::vec3(0.0f), glm::vec3(1.0f));
+}
+
+bool isBiomeTintedGuiBlockFace(int blockType, int faceIdx, bool& foliage) {
+    foliage = (blockType == BLOCK_OAK_LEAVES);
+    if (foliage) return true;
+
+    // Match world rendering: grass uses the colormap on its top face.
+    // Side grass is handled in-world by a separate overlay texture, so the
+    // inventory block model only tints faces that have tintable pixels here.
+    return blockType == BLOCK_GRASS && faceIdx == 3;
+}
+
+glm::vec3 getGuiBiomeTintColor(bool foliage) {
+    glm::vec3 samplePos = gameStarted ? cameraPos : glm::vec3(0.0f);
+    if (!std::isfinite(samplePos.x) || !std::isfinite(samplePos.z)) {
+        samplePos = glm::vec3(0.0f);
+    }
+
+    return getBiomeTintColor(static_cast<int>(std::floor(samplePos.x)),
+                             static_cast<int>(std::floor(samplePos.z)),
+                             foliage);
 }
 
 uint32_t decodeNextUtf8Codepoint(const std::string& text, size_t& index) {
@@ -4404,7 +4427,6 @@ bool areChunksReady();
 
 
 void renderSingleBlockModel(int blockType) {
-    glUniform1i(u_useBiomeTint_location, 0);
     static std::unordered_map<int, unsigned int> singleBlockVAO;
     static std::unordered_map<int, unsigned int> singleBlockVBO;
     static std::unordered_map<int, size_t> singleBlockVertexCount;
@@ -4462,6 +4484,9 @@ void renderSingleBlockModel(int blockType) {
             
             float uvs[] = { 0,1, 1,1, 1,0, 0,0 };
             int indices[] = {0,1,2, 0,2,3};
+            bool foliageTint = false;
+            const bool tintFace = isBiomeTintedGuiBlockFace(blockType, faceIdx, foliageTint);
+            const glm::vec3 faceTintMask = tintFace ? glm::vec3(1.0f) : glm::vec3(0.0f);
             
             for (int idx : indices) {
                 vertices.push_back(faceVerts[idx*3]);
@@ -4484,6 +4509,9 @@ void renderSingleBlockModel(int blockType) {
                 
                 vertices.push_back(1.0f); // Яркость
                 vertices.push_back(0.0f); // Блочный свет
+                vertices.push_back(faceTintMask.r);
+                vertices.push_back(faceTintMask.g);
+                vertices.push_back(faceTintMask.b);
             }
         };
         
@@ -4548,28 +4576,37 @@ void renderSingleBlockModel(int blockType) {
         glBindBuffer(GL_ARRAY_BUFFER, vbo);
         glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
         
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, WORLD_VERTEX_FLOATS*sizeof(float), (void*)0);
         glEnableVertexAttribArray(0);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(3*sizeof(float)));
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, WORLD_VERTEX_FLOATS*sizeof(float), (void*)(3*sizeof(float)));
         glEnableVertexAttribArray(1);
-        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(5*sizeof(float)));
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, WORLD_VERTEX_FLOATS*sizeof(float), (void*)(5*sizeof(float)));
         glEnableVertexAttribArray(2);
-        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(8*sizeof(float)));
+        glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, WORLD_VERTEX_FLOATS*sizeof(float), (void*)(8*sizeof(float)));
         glEnableVertexAttribArray(3);
-        glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 10*sizeof(float), (void*)(9*sizeof(float)));
+        glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, WORLD_VERTEX_FLOATS*sizeof(float), (void*)(9*sizeof(float)));
         glEnableVertexAttribArray(4);
+        glVertexAttribPointer(5, 3, GL_FLOAT, GL_FALSE, WORLD_VERTEX_FLOATS*sizeof(float), (void*)(10*sizeof(float)));
+        glEnableVertexAttribArray(5);
         
         singleBlockVAO[blockType] = vao;
         singleBlockVBO[blockType] = vbo;
-        singleBlockVertexCount[blockType] = vertices.size() / 10;
+        singleBlockVertexCount[blockType] = vertices.size() / WORLD_VERTEX_FLOATS;
     }
     
     auto it = blockTypes.find(blockType);
     if (it != blockTypes.end()) {
+        const bool usesGuiBiomeTint = (blockType == BLOCK_GRASS || blockType == BLOCK_OAK_LEAVES);
+        if (usesGuiBiomeTint) {
+            const glm::vec3 guiTint = getGuiBiomeTintColor(blockType == BLOCK_OAK_LEAVES);
+            glUniform3fv(u_guiBiomeTint_location, 1, glm::value_ptr(guiTint));
+        }
+        glUniform1i(u_useBiomeTint_location, usesGuiBiomeTint ? 2 : 0);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, it->second.textureID);
         glBindVertexArray(singleBlockVAO[blockType]);
         glDrawArrays(GL_TRIANGLES, 0, singleBlockVertexCount[blockType]);
+        glUniform1i(u_useBiomeTint_location, 0);
     }
 }
 
@@ -6750,7 +6787,7 @@ layout (location = 3) in float aLight;
 layout (location = 4) in float aBlockLight;
 layout (location = 5) in vec3 aBiomeTint;
 out vec2 TexCoord; out vec3 FragPos; out vec3 Normal; out float LightLevel; out float BlockLightLevel; out vec3 BiomeTint;
-uniform mat4 model; uniform mat4 view; uniform mat4 projection; uniform int u_useBiomeTint;
+uniform mat4 model; uniform mat4 view; uniform mat4 projection; uniform int u_useBiomeTint; uniform vec3 u_guiBiomeTint;
 void main() {
     vec4 worldPos = model * vec4(aPos, 1.0);
     gl_Position = projection * view * worldPos;
@@ -6758,7 +6795,13 @@ void main() {
     Normal = mat3(transpose(inverse(model))) * aNormal;
     LightLevel = aLight;
     BlockLightLevel = aBlockLight;
-    BiomeTint = (u_useBiomeTint == 1) ? aBiomeTint : vec3(1.0);
+    if (u_useBiomeTint == 1) {
+        BiomeTint = aBiomeTint;
+    } else if (u_useBiomeTint == 2) {
+        BiomeTint = mix(vec3(1.0), u_guiBiomeTint, aBiomeTint);
+    } else {
+        BiomeTint = vec3(1.0);
+    }
 }
 )";
 const char *fragmentShaderSource = R"(
@@ -6886,7 +6929,9 @@ int main() {
     u_sunIntensity_location = glGetUniformLocation(shaderProgram,"u_sunIntensity");
     u_ambientBase_location = glGetUniformLocation(shaderProgram,"u_ambientBase");
     u_useBiomeTint_location = glGetUniformLocation(shaderProgram,"u_useBiomeTint");
+    u_guiBiomeTint_location = glGetUniformLocation(shaderProgram,"u_guiBiomeTint");
     glUniform1i(u_useBiomeTint_location, 0);
+    glUniform3f(u_guiBiomeTint_location, 1.0f, 1.0f, 1.0f);
     u_modelLoc = glGetUniformLocation(shaderProgram,"model");
     u_viewLoc = glGetUniformLocation(shaderProgram,"view");
     u_projLoc = glGetUniformLocation(shaderProgram,"projection");

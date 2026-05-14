@@ -156,6 +156,8 @@ void buildChunkMeshesNearCamera(int maxPerFrame);
 void rebuildChunkMeshesImmediatelyAround(int cx, int cz, int lx, int lz);
 void initReticle();
 void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb, glm::vec3& sky);
+void checkShaderErrors(unsigned int s, const std::string& t);
+void checkProgramErrors(unsigned int p);
 bool isWorldButtonEnabled(int buttonIndex);
 void updateMainMenuOptions(GLFWwindow* window);
 void renderMainMenuOptions(int screenW, int screenH);
@@ -170,6 +172,8 @@ void renderSingleBlockModel(int blockType);
 void renderItemIconFlat(int itemId, int screenX, int screenY, int size, int screenW, int screenH);
 void initCloudLayer();
 void initCelestialBodies();
+void initStarField();
+void renderStars(float currentTime, const glm::vec3& sunDir, const glm::mat4& view, const glm::mat4& proj);
 void renderCelestialBodies(float currentTime, const glm::vec3& sunDir);
 
 void initPlayerRenderer();
@@ -1585,9 +1589,22 @@ unsigned int shaderProgram, reticleProgram, reticleVAO;
 unsigned int cloudTexture = 0, cloudVAO = 0, cloudVBO = 0;
 unsigned int rainTexture = 0, rainVAO = 0, rainVBO = 0;
 unsigned int sunTexture = 0, moonPhasesTexture = 0, celestialVAO = 0, celestialVBO = 0;
+unsigned int starProgram = 0, starVAO = 0, starVBO = 0;
 int currentMoonPhase = 0;
 bool moonWasBelowWorld = false;
 bool isRaining = false;
+FastNoiseLite starDistributionNoise;
+FastNoiseLite starTwinkleNoise;
+
+struct StarPoint {
+    glm::vec3 direction;
+    float brightness;
+    float size;
+    float twinkleSeed;
+};
+
+std::vector<StarPoint> starPoints;
+std::vector<float> starVertexData;
 int u_time_location, u_isWater_location, u_isRain_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location, u_useBiomeTint_location;
 
 struct Chunk;
@@ -5894,6 +5911,8 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glUniform1f(u_sunIntensity_location, sunIntensity);
     glUniform1f(u_ambientBase_location, ambientBase);
     glUniform1i(u_isRain_location, 0);
+    renderStars(currentTime, sunDir, view, proj);
+    glUseProgram(shaderProgram);
     renderCelestialBodies(currentTime, sunDir);
     glUniform3fv(u_sunDir_location, 1, glm::value_ptr(sunDir));
     glUniform1f(u_sunIntensity_location, sunIntensity);
@@ -6046,6 +6065,172 @@ void initCelestialBodies() {
     glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(8 * sizeof(float))); glEnableVertexAttribArray(3);
     glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(9 * sizeof(float))); glEnableVertexAttribArray(4);
     glBindVertexArray(0);
+}
+
+
+const char* starVertexShaderSrc = R"(#version 330 core
+layout (location = 0) in vec3 aDirection;
+layout (location = 1) in float aBrightness;
+layout (location = 2) in float aSize;
+layout (location = 3) in float aTwinkle;
+
+uniform mat4 view;
+uniform mat4 projection;
+uniform vec3 u_cameraPos;
+uniform mat3 u_starRotation;
+uniform float u_nightAlpha;
+
+out float vAlpha;
+out vec3 vColor;
+
+void main() {
+    vec3 dir = normalize(u_starRotation * aDirection);
+    float horizonFade = smoothstep(0.015, 0.18, dir.y);
+    float twinkle = 0.86 + 0.14 * aTwinkle;
+    vAlpha = u_nightAlpha * horizonFade * aBrightness * twinkle;
+    vColor = mix(vec3(0.76, 0.84, 1.0), vec3(1.0, 0.96, 0.84), aBrightness);
+
+    vec3 worldPos = u_cameraPos + dir * 720.0;
+    gl_Position = projection * view * vec4(worldPos, 1.0);
+    gl_PointSize = aSize * (0.88 + 0.12 * aTwinkle);
+}
+)";
+
+const char* starFragmentShaderSrc = R"(#version 330 core
+in float vAlpha;
+in vec3 vColor;
+out vec4 FragColor;
+
+void main() {
+    vec2 centered = gl_PointCoord - vec2(0.5);
+    float dist = length(centered);
+    if (dist > 0.5 || vAlpha <= 0.002) discard;
+    float softCircle = 1.0 - smoothstep(0.18, 0.5, dist);
+    FragColor = vec4(vColor, vAlpha * softCircle);
+}
+)";
+
+void initStarField() {
+    starDistributionNoise.SetSeed(424242);
+    starDistributionNoise.SetNoiseType(FastNoiseLite::NoiseType_Perlin);
+    starDistributionNoise.SetFrequency(0.72f);
+    starTwinkleNoise.SetSeed(919191);
+    starTwinkleNoise.SetNoiseType(FastNoiseLite::NoiseType_Perlin);
+    starTwinkleNoise.SetFrequency(0.55f);
+
+    std::mt19937 rng(20260514u);
+    std::uniform_real_distribution<float> unit(0.0f, 1.0f);
+    constexpr int targetStars = 950;
+    constexpr int maxAttempts = targetStars * 22;
+    starPoints.clear();
+    starPoints.reserve(targetStars);
+
+    for (int attempt = 0; attempt < maxAttempts && static_cast<int>(starPoints.size()) < targetStars; ++attempt) {
+        const float z = unit(rng) * 2.0f - 1.0f;
+        const float angle = unit(rng) * glm::two_pi<float>();
+        const float radius = std::sqrt(std::max(0.0f, 1.0f - z * z));
+        glm::vec3 dir(std::cos(angle) * radius, z, std::sin(angle) * radius);
+
+        const float cloudiness = starDistributionNoise.GetNoise(dir.x * 3.1f + 17.0f,
+                                                                dir.y * 3.1f - 9.0f,
+                                                                dir.z * 3.1f + 4.0f);
+        const float sparkle = starDistributionNoise.GetNoise(dir.x * 18.0f - 5.0f,
+                                                             dir.y * 18.0f + 2.0f,
+                                                             dir.z * 18.0f + 11.0f);
+        const float threshold = 0.33f + 0.16f * unit(rng);
+        if (cloudiness * 0.72f + sparkle * 0.28f < threshold) continue;
+
+        StarPoint star;
+        star.direction = glm::normalize(dir);
+        star.brightness = glm::clamp(0.48f + (cloudiness + 1.0f) * 0.25f + unit(rng) * 0.34f, 0.42f, 1.0f);
+        star.size = glm::mix(1.4f, 3.3f, std::pow(star.brightness, 2.1f));
+        star.twinkleSeed = unit(rng) * 1000.0f + static_cast<float>(attempt) * 0.137f;
+        starPoints.push_back(star);
+    }
+
+    starVertexData.assign(starPoints.size() * 6, 0.0f);
+    for (size_t i = 0; i < starPoints.size(); ++i) {
+        starVertexData[i * 6 + 0] = starPoints[i].direction.x;
+        starVertexData[i * 6 + 1] = starPoints[i].direction.y;
+        starVertexData[i * 6 + 2] = starPoints[i].direction.z;
+        starVertexData[i * 6 + 3] = starPoints[i].brightness;
+        starVertexData[i * 6 + 4] = starPoints[i].size;
+        starVertexData[i * 6 + 5] = 1.0f;
+    }
+
+    unsigned int vs = glCreateShader(GL_VERTEX_SHADER), fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs, 1, &starVertexShaderSrc, NULL); glCompileShader(vs); checkShaderErrors(vs, "star vertex");
+    glShaderSource(fs, 1, &starFragmentShaderSrc, NULL); glCompileShader(fs); checkShaderErrors(fs, "star fragment");
+    starProgram = glCreateProgram();
+    glAttachShader(starProgram, vs); glAttachShader(starProgram, fs);
+    glLinkProgram(starProgram); checkProgramErrors(starProgram);
+    glDeleteShader(vs); glDeleteShader(fs);
+
+    glGenVertexArrays(1, &starVAO);
+    glGenBuffers(1, &starVBO);
+    glBindVertexArray(starVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, starVBO);
+    glBufferData(GL_ARRAY_BUFFER, starVertexData.size() * sizeof(float), starVertexData.data(), GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 1, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(4 * sizeof(float))); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(5 * sizeof(float))); glEnableVertexAttribArray(3);
+    glBindVertexArray(0);
+}
+
+void renderStars(float currentTime, const glm::vec3& sunDir, const glm::mat4& view, const glm::mat4& proj) {
+    if (!starProgram || !starVAO || starPoints.empty()) return;
+
+    float nightAlpha = 1.0f - glm::smoothstep(-0.24f, 0.04f, sunDir.y);
+    if (isRaining) nightAlpha *= 0.18f;
+    if (nightAlpha <= 0.002f) return;
+
+    for (size_t i = 0; i < starPoints.size(); ++i) {
+        const float twinkleNoise = starTwinkleNoise.GetNoise(starPoints[i].twinkleSeed,
+                                                             currentTime * 0.18f,
+                                                             starPoints[i].brightness * 8.0f);
+        starVertexData[i * 6 + 5] = glm::clamp(twinkleNoise * 0.5f + 0.5f, 0.0f, 1.0f);
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, starVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, starVertexData.size() * sizeof(float), starVertexData.data());
+
+    const float angle = std::atan2(sunDir.y, sunDir.x) + glm::half_pi<float>();
+    const float c = std::cos(angle), s = std::sin(angle);
+    const glm::mat3 starRotation(
+        c,  s, 0.0f,
+       -s,  c, 0.0f,
+        0.0f, 0.0f, 1.0f
+    );
+
+    GLboolean depthEnabled = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean cullEnabled = glIsEnabled(GL_CULL_FACE);
+    GLboolean blendEnabled = glIsEnabled(GL_BLEND);
+    GLboolean previousDepthMask = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+
+    if (depthEnabled) glDisable(GL_DEPTH_TEST);
+    if (cullEnabled) glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glEnable(GL_PROGRAM_POINT_SIZE);
+
+    glUseProgram(starProgram);
+    glUniformMatrix4fv(glGetUniformLocation(starProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(glGetUniformLocation(starProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
+    glUniform3fv(glGetUniformLocation(starProgram, "u_cameraPos"), 1, glm::value_ptr(renderCameraPos));
+    glUniformMatrix3fv(glGetUniformLocation(starProgram, "u_starRotation"), 1, GL_FALSE, glm::value_ptr(starRotation));
+    glUniform1f(glGetUniformLocation(starProgram, "u_nightAlpha"), nightAlpha);
+
+    glBindVertexArray(starVAO);
+    glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(starPoints.size()));
+    glBindVertexArray(0);
+
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    if (!blendEnabled) glDisable(GL_BLEND);
+    glDepthMask(previousDepthMask);
+    if (depthEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (cullEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
 }
 
 void renderCelestialBillboard(const glm::vec3& direction, float size, unsigned int texture,
@@ -6708,6 +6893,7 @@ int main() {
     initFOVSlider(optionsSliders);
     initCloudLayer();
     initCelestialBodies();
+    initStarField();
     initPlayerRenderer();
     if (fs::exists("sounds/hurtflesh1.ogg")) {
         soundManager.loadPlayerSound("hurt", "sounds/hurtflesh1.ogg");
@@ -6864,6 +7050,9 @@ int main() {
     if (rainTexture) glDeleteTextures(1, &rainTexture);
     if (sunTexture) glDeleteTextures(1, &sunTexture);
     if (moonPhasesTexture) glDeleteTextures(1, &moonPhasesTexture);
+    if (starVBO) glDeleteBuffers(1, &starVBO);
+    if (starVAO) glDeleteVertexArrays(1, &starVAO);
+    if (starProgram) glDeleteProgram(starProgram);
     if (grassSideOverlayTexture) glDeleteTextures(1, &grassSideOverlayTexture);
     if (rainVAO) glDeleteVertexArrays(1, &rainVAO);
     if (rainVBO) glDeleteBuffers(1, &rainVBO);

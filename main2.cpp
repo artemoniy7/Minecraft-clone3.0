@@ -839,11 +839,11 @@ void initWorldNoise() {
     erosionNoise.SetSeed(seed + 1);
 
     mountainNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    mountainNoise.SetFrequency(0.0038f);
+    mountainNoise.SetFrequency(0.0024f);
     mountainNoise.SetFractalType(FastNoiseLite::FractalType_Ridged);
-    mountainNoise.SetFractalOctaves(5);
-    mountainNoise.SetFractalGain(0.58f);
-    mountainNoise.SetFractalLacunarity(2.15f);
+    mountainNoise.SetFractalOctaves(4);
+    mountainNoise.SetFractalGain(0.42f);
+    mountainNoise.SetFractalLacunarity(1.90f);
     mountainNoise.SetSeed(seed + 2);
 
     riverNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
@@ -1244,7 +1244,7 @@ float getHeightAt(int wx, int wz, float& outBiomeTemp, float& outBiomeHumid, flo
     float oceanMask = 1.0f - continent;
 
     float erosion = (erosionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
-    float roughness = glm::smoothstep(0.50f, 0.88f, erosion);
+    float roughness = glm::smoothstep(0.56f, 0.94f, erosion);
     float flatness = 1.0f - roughness;
 
     float temp01 = (outBiomeTemp + 1.0f) * 0.5f;
@@ -1252,10 +1252,13 @@ float getHeightAt(int wx, int wz, float& outBiomeTemp, float& outBiomeHumid, flo
     float dryPlains = glm::smoothstep(0.45f, 0.85f, temp01) * (1.0f - glm::smoothstep(0.25f, 0.60f, humid01));
 
     float plainsDetail = detailNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) * 1.8f;
-    float rollingHills = erosionNoise.GetNoise(static_cast<float>(wx) + 311.0f, static_cast<float>(wz) - 97.0f) * 5.5f;
+    float rollingHills = erosionNoise.GetNoise(static_cast<float>(wx) + 311.0f, static_cast<float>(wz) - 97.0f) * 4.2f;
     float ridge = (mountainNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
-    float mountainMask = continent * glm::smoothstep(0.58f, 0.86f, erosion) * glm::smoothstep(0.50f, 0.76f, ridge);
-    float mountainHeight = mountainMask * (20.0f + ridge * ridge * 34.0f);
+    float mountainMask = continent
+        * glm::smoothstep(0.72f, 0.96f, erosion)
+        * glm::smoothstep(0.70f, 0.92f, ridge);
+    mountainMask = mountainMask * mountainMask * (3.0f - 2.0f * mountainMask);
+    float mountainHeight = mountainMask * (10.0f + ridge * ridge * 20.0f);
 
     float baseLand = outWaterLevel + glm::mix(-18.0f, 7.0f, continent);
     float height = baseLand;
@@ -1277,7 +1280,7 @@ float getHeightAt(int wx, int wz, float& outBiomeTemp, float& outBiomeHumid, flo
         height = glm::mix(height, std::min(height, riverBed), bankBlend);
     }
 
-    height += transitionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) * glm::mix(0.4f, 2.0f, roughness);
+    height += transitionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) * glm::mix(0.35f, 1.15f, roughness);
 
     const float minH = 3.0f;
     const float maxH = CHUNK_SIZE_Y - 9.0f;
@@ -1306,8 +1309,8 @@ int getBiome(float temp, float humid, float height, float waterLevel) {
     if (depth > 1.0f) return BIOME_RIVER;
     if (std::abs(height - waterLevel) < 2.5f) return BIOME_BEACH;
 
-    if (height > waterLevel + 31.0f) return BIOME_STONY_PEAKS;
-    if (height > waterLevel + 22.0f) return BIOME_MOUNTAINS;
+    if (height > waterLevel + 42.0f) return BIOME_STONY_PEAKS;
+    if (height > waterLevel + 29.0f) return BIOME_MOUNTAINS;
     if (t > 0.62f && h < 0.36f) return BIOME_DESERT;
     if (h > 0.56f && t > 0.24f) return BIOME_FOREST;
     return BIOME_PLAINS;

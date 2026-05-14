@@ -153,6 +153,8 @@ void playRandomAmbientSound();
 void renderSingleBlockModel(int blockType);
 void renderItemIconFlat(int itemId, int screenX, int screenY, int size, int screenW, int screenH);
 void initCloudLayer();
+void initCelestialBodies();
+void renderCelestialBodies(float currentTime, const glm::vec3& sunDir);
 
 void initPlayerRenderer();
 void renderPlayerModel(const glm::vec3& feetPos, const glm::vec3& lookDir, float currentTime);
@@ -1532,6 +1534,9 @@ void workerFunction() {
 unsigned int shaderProgram, reticleProgram, reticleVAO;
 unsigned int cloudTexture = 0, cloudVAO = 0, cloudVBO = 0;
 unsigned int rainTexture = 0, rainVAO = 0, rainVBO = 0;
+unsigned int sunTexture = 0, moonPhasesTexture = 0, celestialVAO = 0, celestialVBO = 0;
+int currentMoonPhase = 0;
+bool moonWasBelowWorld = false;
 bool isRaining = false;
 int u_time_location, u_isWater_location, u_isRain_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location;
 
@@ -5719,6 +5724,10 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glUniform1f(u_sunIntensity_location, sunIntensity);
     glUniform1f(u_ambientBase_location, ambientBase);
     glUniform1i(u_isRain_location, 0);
+    renderCelestialBodies(currentTime, sunDir);
+    glUniform3fv(u_sunDir_location, 1, glm::value_ptr(sunDir));
+    glUniform1f(u_sunIntensity_location, sunIntensity);
+    glUniform1f(u_ambientBase_location, ambientBase);
     renderCloudLayer(currentTime);
     renderRainLayer(currentTime);
 
@@ -5842,6 +5851,126 @@ void initCloudLayer() {
 
     glGenVertexArrays(1, &rainVAO);
     glGenBuffers(1, &rainVBO);
+}
+
+void initCelestialBodies() {
+    sunTexture = loadUITexture("textures/environment/sun.png");
+    moonPhasesTexture = loadUITexture("textures/environment/moon_phases.png");
+
+    glGenVertexArrays(1, &celestialVAO);
+    glGenBuffers(1, &celestialVBO);
+    glBindVertexArray(celestialVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, celestialVBO);
+    glBufferData(GL_ARRAY_BUFFER, 6 * 10 * sizeof(float), nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(3 * sizeof(float))); glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(5 * sizeof(float))); glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(8 * sizeof(float))); glEnableVertexAttribArray(3);
+    glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, 10 * sizeof(float), (void*)(9 * sizeof(float))); glEnableVertexAttribArray(4);
+    glBindVertexArray(0);
+}
+
+void renderCelestialBillboard(const glm::vec3& direction, float size, unsigned int texture,
+                              float u0, float v0, float u1, float v1) {
+    if (!celestialVAO || !celestialVBO || !texture) return;
+
+    glm::vec3 dir = direction;
+    if (!std::isfinite(dir.x) || !std::isfinite(dir.y) || !std::isfinite(dir.z) || glm::length(dir) < 0.001f) return;
+    dir = glm::normalize(dir);
+
+    // Keep one billboard axis fixed in world space so the sun/moon texture does not roll
+    // while it moves along the sky arc. The day/night direction is constrained to the X/Y
+    // plane, so world Z is always perpendicular to it and keeps the quad centered overhead.
+    const glm::vec3 right(0.0f, 0.0f, 1.0f);
+    glm::vec3 up = glm::normalize(glm::cross(right, dir));
+
+    const float distance = 640.0f;
+    const glm::vec3 center = renderCameraPos + dir * distance;
+    const glm::vec3 r = right * (size * 0.5f);
+    const glm::vec3 u = up * (size * 0.5f);
+    const glm::vec3 normal(0.0f, 1.0f, 0.0f);
+
+    auto pushVertex = [](std::vector<float>& verts, const glm::vec3& pos, float uCoord, float vCoord, const glm::vec3& n) {
+        verts.push_back(pos.x); verts.push_back(pos.y); verts.push_back(pos.z);
+        verts.push_back(uCoord); verts.push_back(vCoord);
+        verts.push_back(n.x); verts.push_back(n.y); verts.push_back(n.z);
+        verts.push_back(1.0f); // full sky light: the sun/moon texture is not darkened by world lighting
+        verts.push_back(0.0f);
+    };
+
+    std::vector<float> verts;
+    verts.reserve(6 * 10);
+    glm::vec3 a = center - r + u;
+    glm::vec3 b = center + r + u;
+    glm::vec3 c = center + r - u;
+    glm::vec3 d = center - r - u;
+    pushVertex(verts, a, u0, v0, normal);
+    pushVertex(verts, b, u1, v0, normal);
+    pushVertex(verts, c, u1, v1, normal);
+    pushVertex(verts, c, u1, v1, normal);
+    pushVertex(verts, d, u0, v1, normal);
+    pushVertex(verts, a, u0, v0, normal);
+
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glBindVertexArray(celestialVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, celestialVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, verts.size() * sizeof(float), verts.data());
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+}
+
+void updateMoonPhaseForCycle(const glm::vec3& moonDir) {
+    const bool moonBelowWorld = moonDir.y < -0.02f;
+    if (moonBelowWorld && !moonWasBelowWorld) {
+        currentMoonPhase = (currentMoonPhase + 1) % 8;
+    }
+    moonWasBelowWorld = moonBelowWorld;
+}
+
+void renderCelestialBodies(float currentTime, const glm::vec3& sunDir) {
+    (void)currentTime;
+    if (!celestialVAO || (!sunTexture && !moonPhasesTexture)) return;
+
+    glm::vec3 moonDir = -sunDir;
+    updateMoonPhaseForCycle(moonDir);
+
+    GLboolean depthEnabled = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean cullEnabled = glIsEnabled(GL_CULL_FACE);
+    GLboolean blendEnabled = glIsEnabled(GL_BLEND);
+    GLboolean previousDepthMask = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+
+    if (depthEnabled) glDisable(GL_DEPTH_TEST);
+    if (cullEnabled) glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    // Minecraft-style sun/moon textures often keep a black RGB background instead of alpha.
+    // Additive blending makes that black background invisible while preserving RGBA textures too.
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+
+    glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, glm::value_ptr(glm::mat4(1.0f)));
+    glUniform1i(u_isWater_location, 0);
+    glUniform1i(u_isRain_location, 0);
+    glUniform1f(u_sunIntensity_location, 1.0f);
+    glUniform1f(u_ambientBase_location, 1.0f);
+    glActiveTexture(GL_TEXTURE0);
+
+    renderCelestialBillboard(sunDir, 92.0f, sunTexture, 0.0f, 0.0f, 1.0f, 1.0f);
+
+    const int phase = std::clamp(currentMoonPhase, 0, 7);
+    const int col = phase % 4;
+    const int row = phase / 4;
+    const float u0 = col * 0.25f;
+    const float v0 = row * 0.5f;
+    const float u1 = u0 + 0.25f;
+    const float v1 = v0 + 0.5f;
+    renderCelestialBillboard(moonDir, 72.0f, moonPhasesTexture, u0, v0, u1, v1);
+
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    if (!blendEnabled) glDisable(GL_BLEND);
+    glDepthMask(previousDepthMask);
+    if (depthEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (cullEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
 }
 
 void renderCloudLayer(float currentTime) {
@@ -6323,7 +6452,9 @@ void checkProgramErrors(unsigned int p) { int ok; glGetProgramiv(p,GL_LINK_STATU
 void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb, glm::vec3& sky) {
     float cycle = fmod(t, FULL_CYCLE_SECONDS) / FULL_CYCLE_SECONDS;
     float angle = cycle * glm::two_pi<float>() - glm::half_pi<float>();
-    sunDir = glm::normalize(glm::vec3(cos(angle), sin(angle), 0.35f));
+    // Vertical east/west sky arc: no constant Z offset, so the sun and moon pass
+    // directly over the world instead of sliding along the side of the sky.
+    sunDir = glm::normalize(glm::vec3(cos(angle), sin(angle), 0.0f));
     float daylight = glm::clamp(sunDir.y * 1.15f + 0.15f, 0.0f, 1.0f);
     daylight = daylight * daylight * (3.0f - 2.0f*daylight);
     sunInt = 0.05f + daylight * 0.95f;
@@ -6388,6 +6519,7 @@ int main() {
     loadSliderTextures();
     initFOVSlider(optionsSliders);
     initCloudLayer();
+    initCelestialBodies();
     initPlayerRenderer();
     if (fs::exists("sounds/hurtflesh1.ogg")) {
         soundManager.loadPlayerSound("hurt", "sounds/hurtflesh1.ogg");
@@ -6542,8 +6674,12 @@ int main() {
     if (cloudVAO) glDeleteVertexArrays(1, &cloudVAO);
     if (cloudVBO) glDeleteBuffers(1, &cloudVBO);
     if (rainTexture) glDeleteTextures(1, &rainTexture);
+    if (sunTexture) glDeleteTextures(1, &sunTexture);
+    if (moonPhasesTexture) glDeleteTextures(1, &moonPhasesTexture);
     if (rainVAO) glDeleteVertexArrays(1, &rainVAO);
     if (rainVBO) glDeleteBuffers(1, &rainVBO);
+    if (celestialVAO) glDeleteVertexArrays(1, &celestialVAO);
+    if (celestialVBO) glDeleteBuffers(1, &celestialVBO);
     glDeleteProgram(shaderProgram);
     glDeleteVertexArrays(1, &reticleVAO);
     glDeleteProgram(reticleProgram);

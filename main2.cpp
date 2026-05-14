@@ -6120,8 +6120,10 @@ void initStarField() {
 
     std::mt19937 rng(20260514u);
     std::uniform_real_distribution<float> unit(0.0f, 1.0f);
-    constexpr int targetStars = 950;
-    constexpr int maxAttempts = targetStars * 22;
+    // Keep a dense base layer so the night sky does not get large empty gaps,
+    // then let Perlin noise add brighter clusters on top of it.
+    constexpr int targetStars = 1800;
+    constexpr int maxAttempts = targetStars * 28;
     starPoints.clear();
     starPoints.reserve(targetStars);
 
@@ -6137,13 +6139,17 @@ void initStarField() {
         const float sparkle = starDistributionNoise.GetNoise(dir.x * 18.0f - 5.0f,
                                                              dir.y * 18.0f + 2.0f,
                                                              dir.z * 18.0f + 11.0f);
-        const float threshold = 0.33f + 0.16f * unit(rng);
-        if (cloudiness * 0.72f + sparkle * 0.28f < threshold) continue;
+        const float density = cloudiness * 0.55f + sparkle * 0.25f + unit(rng) * 0.20f;
+        const float baseStarChance = 0.18f;
+        const bool inPerlinCluster = density > 0.12f + 0.08f * unit(rng);
+        const bool inBackgroundLayer = unit(rng) < baseStarChance;
+        if (!inPerlinCluster && !inBackgroundLayer) continue;
 
         StarPoint star;
         star.direction = glm::normalize(dir);
-        star.brightness = glm::clamp(0.48f + (cloudiness + 1.0f) * 0.25f + unit(rng) * 0.34f, 0.42f, 1.0f);
-        star.size = glm::mix(1.4f, 3.3f, std::pow(star.brightness, 2.1f));
+        const float clusterBoost = inPerlinCluster ? glm::clamp((density + 1.0f) * 0.28f, 0.0f, 0.42f) : 0.0f;
+        star.brightness = glm::clamp(0.38f + clusterBoost + unit(rng) * 0.34f, 0.34f, 1.0f);
+        star.size = glm::mix(1.15f, 3.1f, std::pow(star.brightness, 2.0f));
         star.twinkleSeed = unit(rng) * 1000.0f + static_cast<float>(attempt) * 0.137f;
         starPoints.push_back(star);
     }

@@ -824,60 +824,67 @@ void initWorldNoise() {
     int seed = currentWorldSeed;
     
     continentNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    continentNoise.SetFrequency(0.0008f);
+    continentNoise.SetFrequency(0.0016f);
     continentNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    continentNoise.SetFractalOctaves(6);
+    continentNoise.SetFractalOctaves(5);
     continentNoise.SetFractalLacunarity(2.0f);
-    continentNoise.SetFractalGain(0.5f);
+    continentNoise.SetFractalGain(0.50f);
     continentNoise.SetSeed(seed);
 
     erosionNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    erosionNoise.SetFrequency(0.008f);
+    erosionNoise.SetFrequency(0.0065f);
+    erosionNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     erosionNoise.SetFractalOctaves(4);
-    erosionNoise.SetFractalGain(0.5f);
+    erosionNoise.SetFractalGain(0.48f);
     erosionNoise.SetSeed(seed + 1);
 
     mountainNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    mountainNoise.SetFrequency(0.004f);
-    mountainNoise.SetFractalOctaves(7);
-    mountainNoise.SetFractalGain(0.6f);
-    mountainNoise.SetFractalLacunarity(2.2f);
+    mountainNoise.SetFrequency(0.0038f);
+    mountainNoise.SetFractalType(FastNoiseLite::FractalType_Ridged);
+    mountainNoise.SetFractalOctaves(5);
+    mountainNoise.SetFractalGain(0.58f);
+    mountainNoise.SetFractalLacunarity(2.15f);
     mountainNoise.SetSeed(seed + 2);
 
     riverNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    riverNoise.SetFrequency(0.02f);
-    riverNoise.SetFractalOctaves(2);
+    riverNoise.SetFrequency(0.006f);
+    riverNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
+    riverNoise.SetFractalOctaves(3);
     riverNoise.SetSeed(seed + 3);
 
     biomeTempNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    biomeTempNoise.SetFrequency(0.0006f);
+    biomeTempNoise.SetFrequency(0.0011f);
+    biomeTempNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     biomeTempNoise.SetFractalOctaves(3);
     biomeTempNoise.SetSeed(seed + 4);
     
     biomeHumidNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    biomeHumidNoise.SetFrequency(0.0006f);
+    biomeHumidNoise.SetFrequency(0.0011f);
+    biomeHumidNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     biomeHumidNoise.SetFractalOctaves(3);
     biomeHumidNoise.SetSeed(seed + 5);
 
     detailNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    detailNoise.SetFrequency(0.04f);
+    detailNoise.SetFrequency(0.045f);
+    detailNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     detailNoise.SetFractalOctaves(3);
     detailNoise.SetSeed(seed + 6);
 
     treeNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    treeNoise.SetFrequency(0.08f);
+    treeNoise.SetFrequency(0.12f);
     treeNoise.SetSeed(seed + 7);
 
     seaLevelNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    seaLevelNoise.SetFrequency(0.0003f);
+    seaLevelNoise.SetFrequency(0.0018f);
     seaLevelNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    seaLevelNoise.SetFractalOctaves(4);
+    seaLevelNoise.SetFractalOctaves(3);
     seaLevelNoise.SetFractalLacunarity(2.0f);
     seaLevelNoise.SetFractalGain(0.5f);
     seaLevelNoise.SetSeed(seed + 8);
 
     transitionNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    transitionNoise.SetFrequency(0.002f);
+    transitionNoise.SetFrequency(0.004f);
+    transitionNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     transitionNoise.SetFractalOctaves(2);
     transitionNoise.SetSeed(seed + 9);
 }
@@ -1225,65 +1232,85 @@ void smoothSkyLightHorizontally(ChunkData& chunk) {
 // Генерация мира с освещением
 // ----------------------------------------------------------------------
 float getHeightAt(int wx, int wz, float& outBiomeTemp, float& outBiomeHumid, float& outWaterLevel) {
-    outBiomeTemp = biomeTempNoise.GetNoise((float)wx, (float)wz);
-    outBiomeHumid = biomeHumidNoise.GetNoise((float)wx, (float)wz);
+    outBiomeTemp = biomeTempNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
+    outBiomeHumid = biomeHumidNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
 
-    float continent = continentNoise.GetNoise((float)wx, (float)wz);
-    float seaNoise = seaLevelNoise.GetNoise((float)wx, (float)wz);
-    outWaterLevel = 62.0f + seaNoise;
-    outWaterLevel = glm::clamp(outWaterLevel, 45.0f, 75.0f);
+    constexpr float BASE_SEA_LEVEL = 62.0f;
+    float seaNoise = seaLevelNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
+    outWaterLevel = glm::clamp(BASE_SEA_LEVEL + seaNoise * 1.5f, 58.0f, 65.0f);
 
-    float t = (continent + 1.0f) * 0.5f;
-    t = glm::smoothstep(0.0f, 1.0f, t);
-    
-    float minHeightOffset = -12.0f;
-    float maxHeightOffset = 40.0f;
-    float heightOffset = glm::mix(minHeightOffset, maxHeightOffset, t);
-    
-    float mountain = 0.0f;
-    if (continent > 0.35f) {
-        float mountainFactor = (continent - 0.35f) / 0.65f;
-        mountain = mountainNoise.GetNoise((float)wx, (float)wz) * 18.0f * mountainFactor;
+    float continental = continentNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
+    float continent = glm::smoothstep(0.24f, 0.78f, (continental + 1.0f) * 0.5f);
+    float oceanMask = 1.0f - continent;
+
+    float erosion = (erosionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
+    float roughness = glm::smoothstep(0.50f, 0.88f, erosion);
+    float flatness = 1.0f - roughness;
+
+    float temp01 = (outBiomeTemp + 1.0f) * 0.5f;
+    float humid01 = (outBiomeHumid + 1.0f) * 0.5f;
+    float dryPlains = glm::smoothstep(0.45f, 0.85f, temp01) * (1.0f - glm::smoothstep(0.25f, 0.60f, humid01));
+
+    float plainsDetail = detailNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) * 1.8f;
+    float rollingHills = erosionNoise.GetNoise(static_cast<float>(wx) + 311.0f, static_cast<float>(wz) - 97.0f) * 5.5f;
+    float ridge = (mountainNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
+    float mountainMask = continent * glm::smoothstep(0.58f, 0.86f, erosion) * glm::smoothstep(0.50f, 0.76f, ridge);
+    float mountainHeight = mountainMask * (20.0f + ridge * ridge * 34.0f);
+
+    float baseLand = outWaterLevel + glm::mix(-18.0f, 7.0f, continent);
+    float height = baseLand;
+    height += flatness * plainsDetail;
+    height += roughness * rollingHills;
+    height += dryPlains * 1.5f;
+    height += mountainHeight;
+
+    // Oceans should have broad shallow shelves and deeper basins instead of random pits.
+    float oceanFloor = outWaterLevel - glm::mix(5.0f, 22.0f, oceanMask);
+    height = glm::mix(height, oceanFloor + plainsDetail * 0.7f, glm::smoothstep(0.45f, 0.88f, oceanMask));
+
+    // Long low-frequency river lines carve down toward sea level on land.
+    float river = std::abs(riverNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)));
+    float riverBed = outWaterLevel - 2.2f;
+    float riverMask = continent * (1.0f - mountainMask) * (1.0f - glm::smoothstep(0.030f, 0.115f, river));
+    if (riverMask > 0.0f) {
+        float bankBlend = glm::smoothstep(0.0f, 1.0f, riverMask);
+        height = glm::mix(height, std::min(height, riverBed), bankBlend);
     }
 
-    float erosion = erosionNoise.GetNoise((float)wx, (float)wz) * 4.0f;
-    float detail = detailNoise.GetNoise((float)wx, (float)wz) * 1.5f;
+    height += transitionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) * glm::mix(0.4f, 2.0f, roughness);
 
-    float river = riverNoise.GetNoise((float)wx, (float)wz);
-    float riverFactor = 0.0f;
-    if (std::abs(river) < 0.15f) {
-        float dist = 1.0f - (std::abs(river) / 0.15f);
-        riverFactor = -6.0f * dist * dist;
-    }
-
-    float height = outWaterLevel + heightOffset + mountain + erosion + detail + riverFactor;
-
-    float minH = 1.0f;
-    float maxH = CHUNK_SIZE_Y - 8.0f;
-    if (height < minH) height = minH + (height - minH) * 0.5f;
-    if (height > maxH) height = maxH - (maxH - height) * 0.5f;
-    height = glm::clamp(height, minH, maxH);
-
-    return height;
+    const float minH = 3.0f;
+    const float maxH = CHUNK_SIZE_Y - 9.0f;
+    return glm::clamp(height, minH, maxH);
 }
 
-int getBiome(float temp, float humid, float height, float waterLevel) {
-    if (height <= waterLevel) {
-        float depth = waterLevel - height;
-        if (depth < 2.0f) return 6;
-        if (depth < 8.0f) return 4;
-        return 5;
-    }
-    if (height - waterLevel < 3.0f) return 6;
+enum BiomeId {
+    BIOME_PLAINS = 0,
+    BIOME_FOREST = 1,
+    BIOME_MOUNTAINS = 2,
+    BIOME_RIVER = 3,
+    BIOME_OCEAN = 4,
+    BIOME_DEEP_OCEAN = 5,
+    BIOME_BEACH = 6,
+    BIOME_STONY_PEAKS = 7,
+    BIOME_DESERT = 8
+};
 
+int getBiome(float temp, float humid, float height, float waterLevel) {
     float t = (temp + 1.0f) * 0.5f;
     float h = (humid + 1.0f) * 0.5f;
+    float depth = waterLevel - height;
 
-    if (t < 0.2f) return 7;
-    if (t > 0.7f && h > 0.5f) return 1;
-    if (h < 0.3f) return 8;
-    if (height > waterLevel + 25.0f) return 2;
-    return 0;
+    if (depth > 8.5f) return BIOME_DEEP_OCEAN;
+    if (depth > 3.0f) return BIOME_OCEAN;
+    if (depth > 1.0f) return BIOME_RIVER;
+    if (std::abs(height - waterLevel) < 2.5f) return BIOME_BEACH;
+
+    if (height > waterLevel + 31.0f) return BIOME_STONY_PEAKS;
+    if (height > waterLevel + 22.0f) return BIOME_MOUNTAINS;
+    if (t > 0.62f && h < 0.36f) return BIOME_DESERT;
+    if (h > 0.56f && t > 0.24f) return BIOME_FOREST;
+    return BIOME_PLAINS;
 }
 
 bool isTreeNearby(int lx, int lz, int surfaceY, const std::vector<int>& blocks) {
@@ -1300,10 +1327,10 @@ bool isTreeNearby(int lx, int lz, int surfaceY, const std::vector<int>& blocks) 
     return false;
 }
 
-void addTree(int cx, int cz, int lx, int lz, int surfaceY, std::vector<int>& blocks) {
+void addTree(int cx, int cz, int lx, int lz, int surfaceY, std::vector<int>& blocks, float treeThreshold = 0.65f) {
     int worldX = cx * CHUNK_SIZE_X + lx, worldZ = cz * CHUNK_SIZE_Z + lz;
     float treeRand = treeNoise.GetNoise((float)worldX, (float)worldZ);
-    if (treeRand < 0.65f) return;
+    if (treeRand < treeThreshold) return;
 
     // Дерево должно целиком помещаться в чанке, иначе на границе крона обрежется.
     constexpr int TREE_EDGE_MARGIN = 2;
@@ -1410,21 +1437,21 @@ std::shared_ptr<ChunkData> generateChunk(int cx, int cz) {
             int surfaceY = (int)col.height, waterSurfaceY = (int)col.waterLevel, biome = col.biome;
             for (int y = 0; y < CHUNK_SIZE_Y; ++y) {
                 int blockId = 0;
-                if (biome == 3 || biome == 4 || biome == 5) {
-                    if (y == surfaceY) blockId = (biome == 5) ? 3 : 4;
+                if (biome == BIOME_RIVER || biome == BIOME_OCEAN || biome == BIOME_DEEP_OCEAN) {
+                    if (y == surfaceY) blockId = (biome == BIOME_DEEP_OCEAN) ? 3 : 4;
                     else if (y > surfaceY && y <= waterSurfaceY) blockId = 5;
                     else if (y < surfaceY) blockId = (y > surfaceY - 4) ? 4 : 3;
-                } else if (biome == 6) {
+                } else if (biome == BIOME_BEACH) {
                     if (y == surfaceY) blockId = 4;
                     else if (y < surfaceY) blockId = (y > surfaceY - 3) ? 4 : 3;
                 } else {
                     if (y == surfaceY) {
-                        if (biome == 2 || biome == 7) blockId = 3;
-                        else if (biome == 8) blockId = 4;
+                        if (biome == BIOME_MOUNTAINS || biome == BIOME_STONY_PEAKS) blockId = 3;
+                        else if (biome == BIOME_DESERT) blockId = 4;
                         else blockId = 1;
                     } else if (y > surfaceY - 4 && y < surfaceY) {
-                        if (biome == 2 || biome == 7) blockId = 3;
-                        else if (biome == 8) blockId = 4;
+                        if (biome == BIOME_MOUNTAINS || biome == BIOME_STONY_PEAKS) blockId = 3;
+                        else if (biome == BIOME_DESERT) blockId = 4;
                         else blockId = 2;
                     } else if (y < surfaceY - 4) blockId = 3;
                 }
@@ -1460,8 +1487,10 @@ std::shared_ptr<ChunkData> generateChunk(int cx, int cz) {
             int surfaceY = (int)col.height;
             int waterSurfaceY = (int)col.waterLevel;
             int biome = col.biome;
-            if ((biome == 0 || biome == 1) && surfaceY > waterSurfaceY + 2)
-                addTree(cx, cz, x, z, surfaceY, data->blocks);
+            if ((biome == BIOME_PLAINS || biome == BIOME_FOREST) && surfaceY > waterSurfaceY + 2) {
+                float treeThreshold = (biome == BIOME_FOREST) ? 0.42f : 0.82f;
+                addTree(cx, cz, x, z, surfaceY, data->blocks, treeThreshold);
+            }
         }
 
     for (int x = 0; x < CHUNK_SIZE_X; ++x) {
@@ -6087,7 +6116,7 @@ void renderCelestialBodies(float currentTime, const glm::vec3& sunDir) {
     glUniform1f(u_ambientBase_location, 1.0f);
     glActiveTexture(GL_TEXTURE0);
 
-    renderCelestialBillboard(sunDir, 92.0f, sunTexture, 0.0f, 0.0f, 1.0f, 1.0f);
+    renderCelestialBillboard(sunDir, 128.8f, sunTexture, 0.0f, 0.0f, 1.0f, 1.0f);
 
     const int phase = std::clamp(currentMoonPhase, 0, 7);
     const int col = phase % 4;
@@ -6096,7 +6125,7 @@ void renderCelestialBodies(float currentTime, const glm::vec3& sunDir) {
     const float v0 = row * 0.5f;
     const float u1 = u0 + 0.25f;
     const float v1 = v0 + 0.5f;
-    renderCelestialBillboard(moonDir, 72.0f, moonPhasesTexture, u0, v0, u1, v1);
+    renderCelestialBillboard(moonDir, 100.8f, moonPhasesTexture, u0, v0, u1, v1);
 
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     if (!blendEnabled) glDisable(GL_BLEND);

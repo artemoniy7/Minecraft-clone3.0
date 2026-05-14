@@ -212,6 +212,7 @@ float fitMinecraftTextScale(const std::string& text, float maxWidth, float maxHe
 void drawMinecraftTextCentered(const std::string& text, float centerX, float centerY, float scale, int screenW, int screenH, const glm::vec4& color);
 const char* tr(const char* en, const char* ru, const char* jp);
 extern double mouseX, mouseY;
+extern bool gameStarted;
 // Добавьте эти строки в секцию прототипов функций (примерно строка 63)
 struct Slider;
 void loadSliderTextures();

@@ -2086,8 +2086,8 @@ bool loadBiomeColorMap(const char* path, BiomeColorMap& map, const glm::vec3& fa
 }
 
 void initBiomeColorAssets() {
-    loadBiomeColorMap("textures/colormap/grass.png", grassColorMap, glm::vec3(0.55f, 0.75f, 0.32f));
-    loadBiomeColorMap("textures/colormap/foliage.png", foliageColorMap, glm::vec3(0.43f, 0.68f, 0.25f));
+    loadBiomeColorMap("textures/colormap/grass.png", grassColorMap, glm::vec3(0.68f, 0.86f, 0.42f));
+    loadBiomeColorMap("textures/colormap/foliage.png", foliageColorMap, glm::vec3(0.55f, 0.78f, 0.34f));
     grassSideOverlayTexture = loadUITexture("textures/blocks/grass_t.png");
 }
 
@@ -2111,7 +2111,16 @@ glm::vec3 sampleColorMap(const BiomeColorMap& map, float temperature, float humi
 glm::vec3 getBiomeTintColor(int wx, int wz, bool foliage) {
     float temp = (biomeTempNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
     float humid = (biomeHumidNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
-    return sampleColorMap(foliage ? foliageColorMap : grassColorMap, temp, humid);
+    glm::vec3 tint = sampleColorMap(foliage ? foliageColorMap : grassColorMap, temp, humid);
+
+    // The Minecraft colormaps are meant to tint gray source textures, but with our
+    // day/night lighting the raw colors look too dark in common plains/forest areas.
+    // Lift the tint toward a brighter green while keeping biome differences visible.
+    const glm::vec3 vanillaLikeGreen = foliage ? glm::vec3(0.56f, 0.78f, 0.34f)
+                                               : glm::vec3(0.66f, 0.84f, 0.38f);
+    tint = glm::mix(tint, vanillaLikeGreen, foliage ? 0.20f : 0.30f);
+    tint = glm::mix(tint, glm::vec3(1.0f), foliage ? 0.08f : 0.12f);
+    return glm::clamp(tint, glm::vec3(0.0f), glm::vec3(1.0f));
 }
 
 uint32_t decodeNextUtf8Codepoint(const std::string& text, size_t& index) {

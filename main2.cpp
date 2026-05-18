@@ -79,6 +79,7 @@ float thirdPersonDistance = 3.2f;
 
 unsigned int playerTexHead = 0, playerTexBody = 0, playerTexArmL = 0, playerTexArmR = 0, playerTexLegL = 0, playerTexLegR = 0;
 unsigned int playerVAO = 0, playerVBO = 0;
+unsigned int underwaterOverlayTexture = 0;
 
 // ----------------------------------------------------------------------
 // Параметры чанков
@@ -208,6 +209,7 @@ unsigned int loadUITexture(const char* path);
 unsigned int loadTextureStrip(const char* path, bool forceAlpha = false);
 bool loadItemConfig(const std::string& path);
 void drawRectangle(float x, float y, float w, float h, unsigned int texture, int screenW, int screenH);
+void drawRectangleUV(float x, float y, float w, float h, unsigned int texture, int screenW, int screenH, float u0, float v0, float u1, float v1);
 float fitMinecraftTextScale(const std::string& text, float maxWidth, float maxHeight);
 void drawMinecraftTextCentered(const std::string& text, float centerX, float centerY, float scale, int screenW, int screenH, const glm::vec4& color);
 const char* tr(const char* en, const char* ru, const char* jp);
@@ -226,6 +228,8 @@ void handleSliderDrag(Slider& slider, double mouseX, double mouseY);
 void releaseSlider(Slider& slider);
 void initFOVSlider(std::vector<Slider>& sliders);
 bool isWaterBlockAt(float x, float y, float z);
+bool isCameraUnderwater();
+void renderUnderwaterOverlay(int screenW, int screenH, float currentTime);
 
 
 // ----------------------------------------------------------------------
@@ -3925,12 +3929,15 @@ struct Chunk {
     }
     void renderWater() {
         if (!meshReady || !vao[5]) return;
+        GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+        if (cullWasEnabled) glDisable(GL_CULL_FACE);
         glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glDepthMask(GL_FALSE);
         glUniform1i(u_useBiomeTint_location, 0);
         glUniform1i(u_isWater_location, 1);
         glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, blockTypes[5].textureID);
         glBindVertexArray(vao[5]); glDrawArrays(GL_TRIANGLES, 0, vertexCount[5]);
         glDepthMask(GL_TRUE); glDisable(GL_BLEND);
+        if (cullWasEnabled) glEnable(GL_CULL_FACE);
     }
     void saveAsync() {
         if (!dirty || !data) return; dirty = false;
@@ -4294,6 +4301,24 @@ bool isWaterBlockAt(float x, float y, float z) {
     int by = static_cast<int>(std::floor(y));
     int bz = static_cast<int>(std::floor(z));
     return getBlockAt(bx, by, bz) == 5;
+}
+
+bool isCameraUnderwater() {
+    return isWaterBlockAt(renderCameraPos.x, renderCameraPos.y, renderCameraPos.z);
+}
+
+void renderUnderwaterOverlay(int screenW, int screenH, float currentTime) {
+    if (!underwaterOverlayTexture) return;
+
+    const float tile = 128.0f;
+    const float uOffset = std::fmod(currentTime * 0.03f + yaw * 0.0025f, 1.0f);
+    const float vOffset = std::fmod(currentTime * 0.02f - pitch * 0.0035f, 1.0f);
+    const float uScale = static_cast<float>(screenW) / tile;
+    const float vScale = static_cast<float>(screenH) / tile;
+
+    drawRectangleUV(0.0f, 0.0f, static_cast<float>(screenW), static_cast<float>(screenH),
+        underwaterOverlayTexture, screenW, screenH,
+        uOffset, vOffset, uOffset + uScale, vOffset + vScale);
 }
 
 bool isPlayerInWater() {
@@ -5743,6 +5768,7 @@ void initPlayerRenderer() {
     playerTexArmR = loadTextureStrip("textures/entity/player/arm_right.png", true);
     playerTexLegL = loadTextureStrip("textures/entity/player/leg_left.png", true);
     playerTexLegR = loadTextureStrip("textures/entity/player/leg_right.png", true);
+    underwaterOverlayTexture = loadTextureStrip("textures/environment/underwater.png", true);
     auto setupPlayerTex = [](unsigned int tex) {
         glBindTexture(GL_TEXTURE_2D, tex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -5759,6 +5785,13 @@ void initPlayerRenderer() {
     setupPlayerTex(playerTexArmR);
     setupPlayerTex(playerTexLegL);
     setupPlayerTex(playerTexLegR);
+    if (underwaterOverlayTexture) {
+        glBindTexture(GL_TEXTURE_2D, underwaterOverlayTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
     glGenVertexArrays(1, &playerVAO);
     glGenBuffers(1, &playerVBO);
 }
@@ -6018,6 +6051,16 @@ void renderGame(int screenW, int screenH, float currentTime) {
         glm::vec3 feetPos = gameplayRayOrigin - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
         renderPlayerModel(feetPos, cameraFront, currentTime);
         if (cullWasEnabled) glEnable(GL_CULL_FACE);
+    }
+
+    if (isCameraUnderwater()) {
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        renderUnderwaterOverlay(screenW, screenH, currentTime);
+        drawDimOverlay(screenW, screenH, 0.16f);
+        glDisable(GL_BLEND);
+        glEnable(GL_DEPTH_TEST);
     }
 
     // =========================================================

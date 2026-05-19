@@ -5276,6 +5276,51 @@ void renderLanguageMenu(int screenW, int screenH) {
     glEnable(GL_CULL_FACE);
 }
 
+void renderDeleteWorldConfirmMenu(int screenW, int screenH) {
+    glClearColor(0,0,0,1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    const unsigned int darkTexture = menuBackgroundDarkTexture != 0 ? menuBackgroundDarkTexture : menuBackgroundTexture;
+    if (darkTexture) {
+        drawTiledBackground(darkTexture, screenW, screenH);
+    }
+
+    std::string worldName = tr("Unknown world", "Неизвестный мир", "不明なワールド");
+    if (worldListState.selectedIndex >= 0 && worldListState.selectedIndex < static_cast<int>(availableWorlds.size())) {
+        worldName = availableWorlds[worldListState.selectedIndex].displayName;
+    }
+
+    drawMinecraftTextCentered(tr("Are you sure you want to delete this world?",
+                                 "Вы уверены, что хотите удалить этот мир?",
+                                 "このワールドを削除してもよろしいですか？"),
+                              screenW * 0.5f, screenH * 0.33f, 2.6f, screenW, screenH, glm::vec4(1.0f));
+    drawMinecraftTextCentered("'" + worldName + tr("' will be lost forever! (A long time!)",
+                                              "' будет удалён навсегда! (Очень надолго!)",
+                                              "' は永久に失われます！"),
+                              screenW * 0.5f, screenH * 0.41f, 2.1f, screenW, screenH, glm::vec4(1.0f));
+
+    for (int i = 0; i < DELETE_CONFIRM_BUTTON_COUNT; ++i) {
+        const bool hovered = isMouseOverButton(deleteConfirmButtons[i], mouseX, mouseY);
+        unsigned int tex = (menuButtonHighlightTexture && hovered) ? menuButtonHighlightTexture : menuButtonTexture;
+        drawRectangle(deleteConfirmButtons[i].absX, deleteConfirmButtons[i].absY, deleteConfirmButtons[i].absW, deleteConfirmButtons[i].absH, tex, screenW, screenH);
+        drawMinecraftTextCentered(
+            deleteConfirmButtons[i].label,
+            deleteConfirmButtons[i].absX + deleteConfirmButtons[i].absW * 0.5f,
+            deleteConfirmButtons[i].absY + deleteConfirmButtons[i].absH * 0.52f,
+            fitMinecraftButtonTextScale(deleteConfirmButtons[i].label, deleteConfirmButtons[i].absW, deleteConfirmButtons[i].absH),
+            screenW, screenH, getMenuTextColor(hovered)
+        );
+    }
+
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+}
+
 void handleLanguageMenuClick(GLFWwindow* window, int button) {
     if (button != GLFW_MOUSE_BUTTON_LEFT) return;
 

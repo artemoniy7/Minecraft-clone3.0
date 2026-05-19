@@ -39,12 +39,10 @@ namespace fs = std::filesystem;
 // ----------------------------------------------------------------------
 // Глобальные объекты шума
 // ----------------------------------------------------------------------
-FastNoiseLite continentNoise;
-FastNoiseLite erosionNoise;
 FastNoiseLite mountainNoise;
 FastNoiseLite riverNoise;
-FastNoiseLite biomeTempNoise;
-FastNoiseLite biomeHumidNoise;
+FastNoiseLite biomeNoiseA;
+FastNoiseLite biomeNoiseB;
 FastNoiseLite treeNoise;
 FastNoiseLite detailNoise;
 FastNoiseLite seaLevelNoise;
@@ -84,8 +82,8 @@ unsigned int underwaterOverlayTexture = 0;
 // ----------------------------------------------------------------------
 // Параметры чанков
 // ----------------------------------------------------------------------
-const int CHUNK_SIZE_X = 17;
-const int CHUNK_SIZE_Z = 17;
+const int CHUNK_SIZE_X = 16;
+const int CHUNK_SIZE_Z = 16;
 const int CHUNK_SIZE_Y = 128;
 const int CHUNK_VOLUME = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
 
@@ -833,71 +831,56 @@ void initWorldNoise() {
         currentWorldSeed = generateWorldSeed();
     }
     int seed = currentWorldSeed;
-    
-    continentNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    continentNoise.SetFrequency(0.0016f);
-    continentNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    continentNoise.SetFractalOctaves(5);
-    continentNoise.SetFractalLacunarity(2.0f);
-    continentNoise.SetFractalGain(0.50f);
-    continentNoise.SetSeed(seed);
-
-    erosionNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    erosionNoise.SetFrequency(0.0065f);
-    erosionNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    erosionNoise.SetFractalOctaves(4);
-    erosionNoise.SetFractalGain(0.48f);
-    erosionNoise.SetSeed(seed + 1);
 
     mountainNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    mountainNoise.SetFrequency(0.0024f);
-    mountainNoise.SetFractalType(FastNoiseLite::FractalType_Ridged);
+    mountainNoise.SetFrequency(0.008f);
+    mountainNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     mountainNoise.SetFractalOctaves(4);
-    mountainNoise.SetFractalGain(0.42f);
-    mountainNoise.SetFractalLacunarity(1.90f);
-    mountainNoise.SetSeed(seed + 2);
+    mountainNoise.SetFractalGain(0.50f);
+    mountainNoise.SetFractalLacunarity(2.0f);
+    mountainNoise.SetSeed(seed + 1);
 
     riverNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    riverNoise.SetFrequency(0.006f);
+    riverNoise.SetFrequency(0.01f);
     riverNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    riverNoise.SetFractalOctaves(3);
-    riverNoise.SetSeed(seed + 3);
+    riverNoise.SetFractalOctaves(2);
+    riverNoise.SetSeed(seed + 2);
 
-    biomeTempNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    biomeTempNoise.SetFrequency(0.0011f);
-    biomeTempNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    biomeTempNoise.SetFractalOctaves(3);
-    biomeTempNoise.SetSeed(seed + 4);
-    
-    biomeHumidNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    biomeHumidNoise.SetFrequency(0.0011f);
-    biomeHumidNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    biomeHumidNoise.SetFractalOctaves(3);
-    biomeHumidNoise.SetSeed(seed + 5);
+    biomeNoiseA.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    biomeNoiseA.SetFrequency(0.0048f);
+    biomeNoiseA.SetFractalType(FastNoiseLite::FractalType_FBm);
+    biomeNoiseA.SetFractalOctaves(2);
+    biomeNoiseA.SetSeed(seed + 3);
+
+    biomeNoiseB.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    biomeNoiseB.SetFrequency(0.0048f);
+    biomeNoiseB.SetFractalType(FastNoiseLite::FractalType_FBm);
+    biomeNoiseB.SetFractalOctaves(2);
+    biomeNoiseB.SetSeed(seed + 4);
 
     detailNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    detailNoise.SetFrequency(0.045f);
+    detailNoise.SetFrequency(0.03f);
     detailNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     detailNoise.SetFractalOctaves(3);
-    detailNoise.SetSeed(seed + 6);
+    detailNoise.SetSeed(seed + 5);
 
     treeNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
     treeNoise.SetFrequency(0.12f);
-    treeNoise.SetSeed(seed + 7);
+    treeNoise.SetSeed(seed + 6);
 
     seaLevelNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    seaLevelNoise.SetFrequency(0.0018f);
+    seaLevelNoise.SetFrequency(0.0022f);
     seaLevelNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    seaLevelNoise.SetFractalOctaves(3);
+    seaLevelNoise.SetFractalOctaves(2);
     seaLevelNoise.SetFractalLacunarity(2.0f);
     seaLevelNoise.SetFractalGain(0.5f);
-    seaLevelNoise.SetSeed(seed + 8);
+    seaLevelNoise.SetSeed(seed + 7);
 
     transitionNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    transitionNoise.SetFrequency(0.004f);
+    transitionNoise.SetFrequency(0.02f);
     transitionNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     transitionNoise.SetFractalOctaves(2);
-    transitionNoise.SetSeed(seed + 9);
+    transitionNoise.SetSeed(seed + 8);
 }
 
 // ----------------------------------------------------------------------
@@ -1242,56 +1225,38 @@ void smoothSkyLightHorizontally(ChunkData& chunk) {
 // ----------------------------------------------------------------------
 // Генерация мира с освещением
 // ----------------------------------------------------------------------
-float getHeightAt(int wx, int wz, float& outBiomeTemp, float& outBiomeHumid, float& outWaterLevel) {
-    outBiomeTemp = biomeTempNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
-    outBiomeHumid = biomeHumidNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
+float getHeightAt(int wx, int wz, float& outBiomeA, float& outBiomeB, float& outWaterLevel) {
+    outBiomeA = biomeNoiseA.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
+    outBiomeB = biomeNoiseB.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
 
     constexpr float BASE_SEA_LEVEL = 62.0f;
     float seaNoise = seaLevelNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
-    outWaterLevel = glm::clamp(BASE_SEA_LEVEL + seaNoise * 1.5f, 58.0f, 65.0f);
+    outWaterLevel = glm::clamp(BASE_SEA_LEVEL + seaNoise * 1.2f, 60.0f, 64.0f);
 
-    float continental = continentNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
-    float continent = glm::smoothstep(0.24f, 0.78f, (continental + 1.0f) * 0.5f);
-    float oceanMask = 1.0f - continent;
+    float noise1 = mountainNoise.GetNoise(static_cast<float>(wx) * 0.7f, static_cast<float>(wz) * 0.7f);
+    float noise2 = mountainNoise.GetNoise(static_cast<float>(wx) * 1.4f + 131.0f, static_cast<float>(wz) * 1.4f - 77.0f);
+    float noise3 = detailNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
+    float mountain = (mountainNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
 
-    float erosion = (erosionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
-    float roughness = glm::smoothstep(0.56f, 0.94f, erosion);
-    float flatness = 1.0f - roughness;
-
-    float temp01 = (outBiomeTemp + 1.0f) * 0.5f;
-    float humid01 = (outBiomeHumid + 1.0f) * 0.5f;
-    float dryPlains = glm::smoothstep(0.45f, 0.85f, temp01) * (1.0f - glm::smoothstep(0.25f, 0.60f, humid01));
-
-    float plainsDetail = detailNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) * 1.8f;
-    float rollingHills = erosionNoise.GetNoise(static_cast<float>(wx) + 311.0f, static_cast<float>(wz) - 97.0f) * 4.2f;
-    float ridge = (mountainNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
-    float mountainMask = continent
-        * glm::smoothstep(0.72f, 0.96f, erosion)
-        * glm::smoothstep(0.70f, 0.92f, ridge);
-    mountainMask = mountainMask * mountainMask * (3.0f - 2.0f * mountainMask);
-    float mountainHeight = mountainMask * (10.0f + ridge * ridge * 20.0f);
-
-    float baseLand = outWaterLevel + glm::mix(-18.0f, 7.0f, continent);
-    float height = baseLand;
-    height += flatness * plainsDetail;
-    height += roughness * rollingHills;
-    height += dryPlains * 1.5f;
-    height += mountainHeight;
-
-    // Oceans should have broad shallow shelves and deeper basins instead of random pits.
-    float oceanFloor = outWaterLevel - glm::mix(5.0f, 22.0f, oceanMask);
-    height = glm::mix(height, oceanFloor + plainsDetail * 0.7f, glm::smoothstep(0.45f, 0.88f, oceanMask));
-
-    // Long low-frequency river lines carve down toward sea level on land.
-    float river = std::abs(riverNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)));
-    float riverBed = outWaterLevel - 2.2f;
-    float riverMask = continent * (1.0f - mountainMask) * (1.0f - glm::smoothstep(0.030f, 0.115f, river));
-    if (riverMask > 0.0f) {
-        float bankBlend = glm::smoothstep(0.0f, 1.0f, riverMask);
-        height = glm::mix(height, std::min(height, riverBed), bankBlend);
+    float base = noise1 * 28.0f + noise2 * 12.0f + noise3 * 5.0f;
+    float hills = 0.0f;
+    if (mountain > 0.45f) {
+        hills = mountain * mountain * 40.0f;
     }
 
-    height += transitionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) * glm::mix(0.35f, 1.15f, roughness);
+    float detail = transitionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) * 3.0f;
+    float spikeSelector = detailNoise.GetNoise(static_cast<float>(wx) * 2.5f, static_cast<float>(wz) * 2.5f);
+    if (spikeSelector > 0.60f) {
+        float spikeNoise = transitionNoise.GetNoise(static_cast<float>(wx) * 4.2f + 19.0f, static_cast<float>(wz) * 4.2f - 43.0f);
+        detail += spikeNoise * 6.0f;
+    }
+
+    float height = 64.0f + base + hills + detail;
+
+    float river = std::abs(riverNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)));
+    if (river > 0.48f && river < 0.54f) {
+        height -= 3.0f;
+    }
 
     const float minH = 3.0f;
     const float maxH = CHUNK_SIZE_Y - 9.0f;
@@ -1310,20 +1275,19 @@ enum BiomeId {
     BIOME_DESERT = 8
 };
 
-int getBiome(float temp, float humid, float height, float waterLevel) {
-    float t = (temp + 1.0f) * 0.5f;
-    float h = (humid + 1.0f) * 0.5f;
+int getBiome(float biomeA, float biomeB, float height, float waterLevel) {
     float depth = waterLevel - height;
+    float river = std::abs(riverNoise.GetNoise(biomeA * 1000.0f, biomeB * 1000.0f));
 
-    if (depth > 8.5f) return BIOME_DEEP_OCEAN;
-    if (depth > 3.0f) return BIOME_OCEAN;
-    if (depth > 1.0f) return BIOME_RIVER;
-    if (std::abs(height - waterLevel) < 2.5f) return BIOME_BEACH;
+    if (river > 0.49f && river < 0.54f && depth < 2.0f) return BIOME_RIVER;
+    if (depth > 7.0f) return BIOME_DEEP_OCEAN;
+    if (depth > 1.5f) return BIOME_OCEAN;
+    if (std::abs(height - waterLevel) < 1.2f) return BIOME_BEACH;
 
-    if (height > waterLevel + 42.0f) return BIOME_STONY_PEAKS;
-    if (height > waterLevel + 29.0f) return BIOME_MOUNTAINS;
-    if (t > 0.62f && h < 0.36f) return BIOME_DESERT;
-    if (h > 0.56f && t > 0.24f) return BIOME_FOREST;
+    if (height > waterLevel + 37.0f) return BIOME_STONY_PEAKS;
+    if (height > waterLevel + 25.0f) return BIOME_MOUNTAINS;
+    if (biomeA > 0.5f) return BIOME_FOREST;
+    if (biomeB < -0.3f) return BIOME_DESERT;
     return BIOME_PLAINS;
 }
 
@@ -1428,7 +1392,7 @@ void addTree(int cx, int cz, int lx, int lz, int surfaceY, std::vector<int>& blo
     addLeafSquare(topY - 3, 2);
 }
 
-struct ColumnInfo { float height, biomeTemp, biomeHumid, waterLevel; int biome; };
+struct ColumnInfo { float height, biomeA, biomeB, waterLevel; int biome; };
 
 std::shared_ptr<ChunkData> generateChunk(int cx, int cz) {
     auto data = std::make_shared<ChunkData>(cx, cz);
@@ -1436,13 +1400,13 @@ std::shared_ptr<ChunkData> generateChunk(int cx, int cz) {
     for (int x = 0; x < CHUNK_SIZE_X; ++x)
         for (int z = 0; z < CHUNK_SIZE_Z; ++z) {
             int worldX = cx * CHUNK_SIZE_X + x, worldZ = cz * CHUNK_SIZE_Z + z;
-            float temp, humid, water;
-            float landHeight = getHeightAt(worldX, worldZ, temp, humid, water);
+            float biomeA, biomeB, water;
+            float landHeight = getHeightAt(worldX, worldZ, biomeA, biomeB, water);
             int waterSurfaceY = (int)water, surfaceY = (int)landHeight;
             surfaceY = std::clamp(surfaceY, 0, CHUNK_SIZE_Y - 1);
             waterSurfaceY = std::clamp(waterSurfaceY, 0, CHUNK_SIZE_Y - 1);
-            int biome = getBiome(temp, humid, surfaceY, waterSurfaceY);
-            columns[x][z] = {landHeight, temp, humid, water, biome};
+            int biome = getBiome(biomeA, biomeB, surfaceY, waterSurfaceY);
+            columns[x][z] = {landHeight, biomeA, biomeB, water, biome};
         }
     
     for (int x = 0; x < CHUNK_SIZE_X; ++x)
@@ -1682,6 +1646,51 @@ void renderLanguageMenu(int screenW, int screenH) {
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
 }
+
+void renderDeleteWorldConfirmMenu(int screenW, int screenH) {
+    glClearColor(0,0,0,1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    const unsigned int darkTexture = menuBackgroundDarkTexture != 0 ? menuBackgroundDarkTexture : menuBackgroundTexture;
+    if (darkTexture) {
+        drawTiledBackground(darkTexture, screenW, screenH);
+    }
+
+    std::string worldName = tr("Unknown world", "Неизвестный мир", "不明なワールド");
+    if (worldListState.selectedIndex >= 0 && worldListState.selectedIndex < static_cast<int>(availableWorlds.size())) {
+        worldName = availableWorlds[worldListState.selectedIndex].displayName;
+    }
+
+    drawMinecraftTextCentered(tr("Are you sure you want to delete this world?",
+                                 "Вы уверены, что хотите удалить этот мир?",
+                                 "このワールドを削除してもよろしいですか？"),
+                              screenW * 0.5f, screenH * 0.33f, 2.6f, screenW, screenH, glm::vec4(1.0f));
+    drawMinecraftTextCentered("'" + worldName + tr("' will be lost forever! (A long time!)",
+                                              "' будет удалён навсегда! (Очень надолго!)",
+                                              "' は永久に失われます！"),
+                              screenW * 0.5f, screenH * 0.41f, 2.1f, screenW, screenH, glm::vec4(1.0f));
+
+    for (int i = 0; i < DELETE_CONFIRM_BUTTON_COUNT; ++i) {
+        const bool hovered = isMouseOverButton(deleteConfirmButtons[i], mouseX, mouseY);
+        unsigned int tex = (menuButtonHighlightTexture && hovered) ? menuButtonHighlightTexture : menuButtonTexture;
+        drawRectangle(deleteConfirmButtons[i].absX, deleteConfirmButtons[i].absY, deleteConfirmButtons[i].absW, deleteConfirmButtons[i].absH, tex, screenW, screenH);
+        drawMinecraftTextCentered(
+            deleteConfirmButtons[i].label,
+            deleteConfirmButtons[i].absX + deleteConfirmButtons[i].absW * 0.5f,
+            deleteConfirmButtons[i].absY + deleteConfirmButtons[i].absH * 0.52f,
+            fitMinecraftButtonTextScale(deleteConfirmButtons[i].label, deleteConfirmButtons[i].absW, deleteConfirmButtons[i].absH),
+            screenW, screenH, getMenuTextColor(hovered)
+        );
+    }
+
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+}
 #endif
 
 
@@ -1711,6 +1720,7 @@ int currentHotbarSlot = 0;
 int inventoryScrollRow = 0;
 constexpr int MAIN_MENU_BUTTON_COUNT = 6;
 constexpr int WORLD_SELECT_BUTTON_COUNT = 6;
+constexpr int DELETE_CONFIRM_BUTTON_COUNT = 2;
 constexpr int LANGUAGE_BUTTON_COUNT = 1;
 constexpr int OPTIONS_ROW1_BUTTON_COUNT = 4;
 constexpr int OPTIONS_ROW2_BUTTON_COUNT = 5;
@@ -1784,6 +1794,10 @@ Button worldButtons[WORLD_SELECT_BUTTON_COUNT] = {
     {0.61f, 0.875f, 0.2025f, 0.0486f, 0,0,0,0, false, "Create New World"},
     {0.557f, 0.936f, 0.0972f, 0.0486f, 0,0,0,0, false, "Re-Create"},
     {0.663f, 0.936f, 0.0972f, 0.0486f, 0,0,0,0, false, "Cancel"}
+};
+Button deleteConfirmButtons[DELETE_CONFIRM_BUTTON_COUNT] = {
+    {0.36f, 0.64f, 0.31f, 0.07f, 0,0,0,0, false, "Delete"},
+    {0.64f, 0.64f, 0.31f, 0.07f, 0,0,0,0, false, "Cancel"}
 };
 Button pauseResumeButton = {0.5f, 0.45f, 0.4f, 0.08f, 0,0,0,0, false, "Resume"};
 Button pauseExitButton   = {0.5f, 0.55f, 0.4f, 0.08f, 0,0,0,0, false, "Exit to Menu"};
@@ -2133,8 +2147,8 @@ glm::vec3 sampleColorMap(const BiomeColorMap& map, float temperature, float humi
 }
 
 glm::vec3 getBiomeTintColor(int wx, int wz, bool foliage) {
-    float temp = (biomeTempNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
-    float humid = (biomeHumidNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
+    float temp = (biomeNoiseA.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
+    float humid = (biomeNoiseB.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
 
     // Bias ordinary terrain toward Minecraft's warmer plains/forest range.
     // Without this, the low-frequency noise often samples cold colormap areas,
@@ -2417,6 +2431,8 @@ void updateUILabels() {
     worldButtons[3].label = tr("Create New World", "Создать новый мир", "新しいワールドを作成");
     worldButtons[4].label = tr("Re-Create", "Пересоздать", "再作成");
     worldButtons[5].label = tr("Cancel", "Отмена", "キャンセル");
+    deleteConfirmButtons[0].label = tr("Delete", "Удалить", "削除");
+    deleteConfirmButtons[1].label = tr("Cancel", "Отмена", "キャンセル");
 
     pauseResumeButton.label = tr("Resume", "Продолжить", "ゲームに戻る");
     pauseExitButton.label = tr("Exit to Menu", "Выйти в меню", "メニューへ戻る");
@@ -2604,6 +2620,12 @@ void updateButtonPositions(int screenW, int screenH) {
         languageButtons[i].absH = languageButtons[i].relH * screenH;
         languageButtons[i].absX = languageButtons[i].relX * screenW - languageButtons[i].absW/2;
         languageButtons[i].absY = languageButtons[i].relY * screenH - languageButtons[i].absH/2;
+    }
+    for (int i=0; i<DELETE_CONFIRM_BUTTON_COUNT; ++i) {
+        deleteConfirmButtons[i].absW = deleteConfirmButtons[i].relW * screenW;
+        deleteConfirmButtons[i].absH = deleteConfirmButtons[i].relH * screenH;
+        deleteConfirmButtons[i].absX = deleteConfirmButtons[i].relX * screenW - deleteConfirmButtons[i].absW/2;
+        deleteConfirmButtons[i].absY = deleteConfirmButtons[i].relY * screenH - deleteConfirmButtons[i].absH/2;
     }
     pauseResumeButton.absW = pauseResumeButton.relW * screenW;
     pauseResumeButton.absH = pauseResumeButton.relH * screenH;
@@ -4402,6 +4424,7 @@ void scanAmbientSounds() {
 enum class GameState {
     MAIN_MENU,
     WORLD_SELECT_MENU,
+    DELETE_WORLD_CONFIRM_MENU,
     LOADING_GAME,
     LANGUAGE_MENU,
     IN_GAME,
@@ -4430,6 +4453,8 @@ void renderMainMenu(int screenW, int screenH);
 void handleMainMenuClick(GLFWwindow* window, int button);
 void renderLanguageMenu(int screenW, int screenH);
 void handleLanguageMenuClick(GLFWwindow* window, int button);
+void renderDeleteWorldConfirmMenu(int screenW, int screenH);
+void handleDeleteWorldConfirmMenuClick(GLFWwindow* window, int button);
 void updateWorldSelectMenu(GLFWwindow* window);
 void renderWorldSelectMenu(int screenW, int screenH);
 void handleWorldSelectMenuClick(GLFWwindow* window, int button);
@@ -5378,6 +5403,8 @@ void handleWorldSelectMenuClick(GLFWwindow* window, int button) {
             if (worldListState.selectedIndex >= 0 && worldListState.selectedIndex < static_cast<int>(availableWorlds.size())) {
                 loadGame();
             }
+        } else if (i == 2) {
+            currentState = GameState::DELETE_WORLD_CONFIRM_MENU;
         } else if (i == 3) {
             startNewGame();
         } else if (i == 5) {
@@ -5386,6 +5413,34 @@ void handleWorldSelectMenuClick(GLFWwindow* window, int button) {
             // Остальные кнопки пока заглушки
         }
         worldButtons[i].clicked = false;
+        break;
+    }
+}
+
+void handleDeleteWorldConfirmMenuClick(GLFWwindow* window, int button) {
+    if (button != GLFW_MOUSE_BUTTON_LEFT) return;
+
+    double mx, my;
+    glfwGetCursorPos(window, &mx, &my);
+    for (int i = 0; i < DELETE_CONFIRM_BUTTON_COUNT; ++i) {
+        if (mx < deleteConfirmButtons[i].absX || mx > deleteConfirmButtons[i].absX + deleteConfirmButtons[i].absW ||
+            my < deleteConfirmButtons[i].absY || my > deleteConfirmButtons[i].absY + deleteConfirmButtons[i].absH) {
+            continue;
+        }
+
+        soundManager.playUISound("ui");
+        if (i == 0) {
+            if (worldListState.selectedIndex >= 0 && worldListState.selectedIndex < static_cast<int>(availableWorlds.size())) {
+                const int removeIndex = worldListState.selectedIndex;
+                fs::remove_all(getWorldPath(availableWorlds[removeIndex].folderName));
+                refreshWorldMenuEntries();
+                worldListState.selectedIndex = -1;
+                worldListState.lastClickedIndex = -1;
+            }
+            currentState = GameState::WORLD_SELECT_MENU;
+        } else {
+            currentState = GameState::WORLD_SELECT_MENU;
+        }
         break;
     }
 }
@@ -6724,6 +6779,9 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     } else if (currentState == GameState::WORLD_SELECT_MENU) {
         if (action != GLFW_PRESS) return;
         handleWorldSelectMenuClick(window, button);
+    } else if (currentState == GameState::DELETE_WORLD_CONFIRM_MENU) {
+        if (action != GLFW_PRESS) return;
+        handleDeleteWorldConfirmMenuClick(window, button);
     }else if (currentState == GameState::MAIN_MENU_OPTIONS) {
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
             double mx, my;
@@ -7057,6 +7115,16 @@ int main() {
                 escWasPressedInMenu = false;
             }
         }
+        if (currentState == GameState::DELETE_WORLD_CONFIRM_MENU) {
+            if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+                if (!escWasPressedInMenu) {
+                    currentState = GameState::WORLD_SELECT_MENU;
+                }
+                escWasPressedInMenu = true;
+            } else {
+                escWasPressedInMenu = false;
+            }
+        }
 
         switch (currentState) {
             case GameState::MAIN_MENU:
@@ -7066,6 +7134,9 @@ int main() {
             case GameState::WORLD_SELECT_MENU:
                 updateWorldSelectMenu(window);
                 renderWorldSelectMenu(screenW, screenH);
+                break;
+            case GameState::DELETE_WORLD_CONFIRM_MENU:
+                renderDeleteWorldConfirmMenu(screenW, screenH);
                 break;
             case GameState::LANGUAGE_MENU:
                 renderLanguageMenu(screenW, screenH);

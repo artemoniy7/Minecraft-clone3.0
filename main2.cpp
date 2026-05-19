@@ -1646,6 +1646,51 @@ void renderLanguageMenu(int screenW, int screenH) {
     glEnable(GL_DEPTH_TEST);
     glEnable(GL_CULL_FACE);
 }
+
+void renderDeleteWorldConfirmMenu(int screenW, int screenH) {
+    glClearColor(0,0,0,1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    const unsigned int darkTexture = menuBackgroundDarkTexture != 0 ? menuBackgroundDarkTexture : menuBackgroundTexture;
+    if (darkTexture) {
+        drawTiledBackground(darkTexture, screenW, screenH);
+    }
+
+    std::string worldName = tr("Unknown world", "Неизвестный мир", "不明なワールド");
+    if (worldListState.selectedIndex >= 0 && worldListState.selectedIndex < static_cast<int>(availableWorlds.size())) {
+        worldName = availableWorlds[worldListState.selectedIndex].displayName;
+    }
+
+    drawMinecraftTextCentered(tr("Are you sure you want to delete this world?",
+                                 "Вы уверены, что хотите удалить этот мир?",
+                                 "このワールドを削除してもよろしいですか？"),
+                              screenW * 0.5f, screenH * 0.33f, 2.6f, screenW, screenH, glm::vec4(1.0f));
+    drawMinecraftTextCentered("'" + worldName + tr("' will be lost forever! (A long time!)",
+                                              "' будет удалён навсегда! (Очень надолго!)",
+                                              "' は永久に失われます！"),
+                              screenW * 0.5f, screenH * 0.41f, 2.1f, screenW, screenH, glm::vec4(1.0f));
+
+    for (int i = 0; i < DELETE_CONFIRM_BUTTON_COUNT; ++i) {
+        const bool hovered = isMouseOverButton(deleteConfirmButtons[i], mouseX, mouseY);
+        unsigned int tex = (menuButtonHighlightTexture && hovered) ? menuButtonHighlightTexture : menuButtonTexture;
+        drawRectangle(deleteConfirmButtons[i].absX, deleteConfirmButtons[i].absY, deleteConfirmButtons[i].absW, deleteConfirmButtons[i].absH, tex, screenW, screenH);
+        drawMinecraftTextCentered(
+            deleteConfirmButtons[i].label,
+            deleteConfirmButtons[i].absX + deleteConfirmButtons[i].absW * 0.5f,
+            deleteConfirmButtons[i].absY + deleteConfirmButtons[i].absH * 0.52f,
+            fitMinecraftButtonTextScale(deleteConfirmButtons[i].label, deleteConfirmButtons[i].absW, deleteConfirmButtons[i].absH),
+            screenW, screenH, getMenuTextColor(hovered)
+        );
+    }
+
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+}
 #endif
 
 
@@ -1675,6 +1720,7 @@ int currentHotbarSlot = 0;
 int inventoryScrollRow = 0;
 constexpr int MAIN_MENU_BUTTON_COUNT = 6;
 constexpr int WORLD_SELECT_BUTTON_COUNT = 6;
+constexpr int DELETE_CONFIRM_BUTTON_COUNT = 2;
 constexpr int LANGUAGE_BUTTON_COUNT = 1;
 constexpr int OPTIONS_ROW1_BUTTON_COUNT = 4;
 constexpr int OPTIONS_ROW2_BUTTON_COUNT = 5;
@@ -1748,6 +1794,10 @@ Button worldButtons[WORLD_SELECT_BUTTON_COUNT] = {
     {0.61f, 0.875f, 0.2025f, 0.0486f, 0,0,0,0, false, "Create New World"},
     {0.557f, 0.936f, 0.0972f, 0.0486f, 0,0,0,0, false, "Re-Create"},
     {0.663f, 0.936f, 0.0972f, 0.0486f, 0,0,0,0, false, "Cancel"}
+};
+Button deleteConfirmButtons[DELETE_CONFIRM_BUTTON_COUNT] = {
+    {0.36f, 0.64f, 0.31f, 0.07f, 0,0,0,0, false, "Delete"},
+    {0.64f, 0.64f, 0.31f, 0.07f, 0,0,0,0, false, "Cancel"}
 };
 Button pauseResumeButton = {0.5f, 0.45f, 0.4f, 0.08f, 0,0,0,0, false, "Resume"};
 Button pauseExitButton   = {0.5f, 0.55f, 0.4f, 0.08f, 0,0,0,0, false, "Exit to Menu"};
@@ -2381,6 +2431,8 @@ void updateUILabels() {
     worldButtons[3].label = tr("Create New World", "Создать новый мир", "新しいワールドを作成");
     worldButtons[4].label = tr("Re-Create", "Пересоздать", "再作成");
     worldButtons[5].label = tr("Cancel", "Отмена", "キャンセル");
+    deleteConfirmButtons[0].label = tr("Delete", "Удалить", "削除");
+    deleteConfirmButtons[1].label = tr("Cancel", "Отмена", "キャンセル");
 
     pauseResumeButton.label = tr("Resume", "Продолжить", "ゲームに戻る");
     pauseExitButton.label = tr("Exit to Menu", "Выйти в меню", "メニューへ戻る");
@@ -2568,6 +2620,12 @@ void updateButtonPositions(int screenW, int screenH) {
         languageButtons[i].absH = languageButtons[i].relH * screenH;
         languageButtons[i].absX = languageButtons[i].relX * screenW - languageButtons[i].absW/2;
         languageButtons[i].absY = languageButtons[i].relY * screenH - languageButtons[i].absH/2;
+    }
+    for (int i=0; i<DELETE_CONFIRM_BUTTON_COUNT; ++i) {
+        deleteConfirmButtons[i].absW = deleteConfirmButtons[i].relW * screenW;
+        deleteConfirmButtons[i].absH = deleteConfirmButtons[i].relH * screenH;
+        deleteConfirmButtons[i].absX = deleteConfirmButtons[i].relX * screenW - deleteConfirmButtons[i].absW/2;
+        deleteConfirmButtons[i].absY = deleteConfirmButtons[i].relY * screenH - deleteConfirmButtons[i].absH/2;
     }
     pauseResumeButton.absW = pauseResumeButton.relW * screenW;
     pauseResumeButton.absH = pauseResumeButton.relH * screenH;
@@ -4366,6 +4424,7 @@ void scanAmbientSounds() {
 enum class GameState {
     MAIN_MENU,
     WORLD_SELECT_MENU,
+    DELETE_WORLD_CONFIRM_MENU,
     LOADING_GAME,
     LANGUAGE_MENU,
     IN_GAME,
@@ -4394,6 +4453,8 @@ void renderMainMenu(int screenW, int screenH);
 void handleMainMenuClick(GLFWwindow* window, int button);
 void renderLanguageMenu(int screenW, int screenH);
 void handleLanguageMenuClick(GLFWwindow* window, int button);
+void renderDeleteWorldConfirmMenu(int screenW, int screenH);
+void handleDeleteWorldConfirmMenuClick(GLFWwindow* window, int button);
 void updateWorldSelectMenu(GLFWwindow* window);
 void renderWorldSelectMenu(int screenW, int screenH);
 void handleWorldSelectMenuClick(GLFWwindow* window, int button);
@@ -5342,6 +5403,8 @@ void handleWorldSelectMenuClick(GLFWwindow* window, int button) {
             if (worldListState.selectedIndex >= 0 && worldListState.selectedIndex < static_cast<int>(availableWorlds.size())) {
                 loadGame();
             }
+        } else if (i == 2) {
+            currentState = GameState::DELETE_WORLD_CONFIRM_MENU;
         } else if (i == 3) {
             startNewGame();
         } else if (i == 5) {
@@ -5350,6 +5413,34 @@ void handleWorldSelectMenuClick(GLFWwindow* window, int button) {
             // Остальные кнопки пока заглушки
         }
         worldButtons[i].clicked = false;
+        break;
+    }
+}
+
+void handleDeleteWorldConfirmMenuClick(GLFWwindow* window, int button) {
+    if (button != GLFW_MOUSE_BUTTON_LEFT) return;
+
+    double mx, my;
+    glfwGetCursorPos(window, &mx, &my);
+    for (int i = 0; i < DELETE_CONFIRM_BUTTON_COUNT; ++i) {
+        if (mx < deleteConfirmButtons[i].absX || mx > deleteConfirmButtons[i].absX + deleteConfirmButtons[i].absW ||
+            my < deleteConfirmButtons[i].absY || my > deleteConfirmButtons[i].absY + deleteConfirmButtons[i].absH) {
+            continue;
+        }
+
+        soundManager.playUISound("ui");
+        if (i == 0) {
+            if (worldListState.selectedIndex >= 0 && worldListState.selectedIndex < static_cast<int>(availableWorlds.size())) {
+                const int removeIndex = worldListState.selectedIndex;
+                fs::remove_all(getWorldPath(availableWorlds[removeIndex].folderName));
+                refreshWorldMenuEntries();
+                worldListState.selectedIndex = -1;
+                worldListState.lastClickedIndex = -1;
+            }
+            currentState = GameState::WORLD_SELECT_MENU;
+        } else {
+            currentState = GameState::WORLD_SELECT_MENU;
+        }
         break;
     }
 }
@@ -6688,6 +6779,9 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     } else if (currentState == GameState::WORLD_SELECT_MENU) {
         if (action != GLFW_PRESS) return;
         handleWorldSelectMenuClick(window, button);
+    } else if (currentState == GameState::DELETE_WORLD_CONFIRM_MENU) {
+        if (action != GLFW_PRESS) return;
+        handleDeleteWorldConfirmMenuClick(window, button);
     }else if (currentState == GameState::MAIN_MENU_OPTIONS) {
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
             double mx, my;
@@ -7021,6 +7115,16 @@ int main() {
                 escWasPressedInMenu = false;
             }
         }
+        if (currentState == GameState::DELETE_WORLD_CONFIRM_MENU) {
+            if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+                if (!escWasPressedInMenu) {
+                    currentState = GameState::WORLD_SELECT_MENU;
+                }
+                escWasPressedInMenu = true;
+            } else {
+                escWasPressedInMenu = false;
+            }
+        }
 
         switch (currentState) {
             case GameState::MAIN_MENU:
@@ -7030,6 +7134,9 @@ int main() {
             case GameState::WORLD_SELECT_MENU:
                 updateWorldSelectMenu(window);
                 renderWorldSelectMenu(screenW, screenH);
+                break;
+            case GameState::DELETE_WORLD_CONFIRM_MENU:
+                renderDeleteWorldConfirmMenu(screenW, screenH);
                 break;
             case GameState::LANGUAGE_MENU:
                 renderLanguageMenu(screenW, screenH);

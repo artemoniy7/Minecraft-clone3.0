@@ -1,0 +1,1730 @@
+#include "include/glad/glad.h"
+#include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/constants.hpp>
+#include <iostream>
+#include <vector>
+#include <unordered_map>
+#include <unordered_set>
+#include <cmath>
+#include <limits>
+#include <fstream>
+#include <string>
+#include <filesystem>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <chrono>
+#include <algorithm>
+#include <random>
+#include <cstring>
+#include <ctime>
+#include <future>
+#include <regex>
+
+#include <SFML/Audio.hpp>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+#include "include/nlohmann/json.hpp"
+#include "FastNoiseLite.h"
+
+using json = nlohmann::json;
+namespace fs = std::filesystem;
+
+// ----------------------------------------------------------------------
+// Глобальные объекты шума
+// ----------------------------------------------------------------------
+FastNoiseLite continentNoise;
+FastNoiseLite erosionNoise;
+FastNoiseLite mountainNoise;
+FastNoiseLite riverNoise;
+FastNoiseLite biomeTempNoise;
+FastNoiseLite biomeHumidNoise;
+FastNoiseLite treeNoise;
+FastNoiseLite detailNoise;
+FastNoiseLite seaLevelNoise;
+FastNoiseLite transitionNoise;
+
+// ----------------------------------------------------------------------
+// Окно и камера
+// ----------------------------------------------------------------------
+const unsigned int SCR_WIDTH = 1280;
+const unsigned int SCR_HEIGHT = 720;
+const int BLOCK_UNKNOWN = -1;
+
+glm::vec3 cameraPos   = glm::vec3(0.0f, 200.0f,  0.0f);
+glm::vec3 cameraFront = glm::vec3(0.0f, 0.0f, -1.0f);
+glm::vec3 cameraUp    = glm::vec3(0.0f, 1.0f,  0.0f);
+
+float yaw   = -90.0f;
+float pitch =  0.0f;
+double lastX = SCR_WIDTH / 2.0;
+double lastY = SCR_HEIGHT / 2.0;
+bool firstMouse = true;
+float deltaTime = 0.0f;
+float lastFrame = 0.0f;
+
+// ----------------------------------------------------------------------
+// Параметры чанков
+// ----------------------------------------------------------------------
+const int CHUNK_SIZE_X = 17;
+const int CHUNK_SIZE_Z = 17;
+const int CHUNK_SIZE_Y = 128;
+const int CHUNK_VOLUME = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
+
+// ----------------------------------------------------------------------
+// Физика и коллизии
+// ----------------------------------------------------------------------
+glm::vec3 playerVelocity = glm::vec3(0.0f);
+bool isOnGround = false;
+const float GRAVITY = -32.0f;
+const float JUMP_POWER = 8.94f;
+const float PLAYER_HEIGHT = 1.8f;
+const float PLAYER_WIDTH = 0.6f;
+const float EYE_HEIGHT = 1.62f;
+const float WALK_SPEED = 4.317f;
+int playerHealth = 20;
+const int MAX_PLAYER_HEALTH = 20;
+
+// ----------------------------------------------------------------------
+// Таблица твёрдости блоков
+// ----------------------------------------------------------------------
+bool isSolidBlockFast[256] = {false};
+
+// Прототипы функций
+int getBlockAt(int wx, int wy, int wz);
+void setBlockAt(int wx, int wy, int wz, int type);
+int getBlockAtForMesh(int wx, int wy, int wz);
+
+// ----------------------------------------------------------------------
+// Реализация коллизий
+// ----------------------------------------------------------------------
+bool isSolidBlock(int blockId) {
+    return blockId != 0 && blockId != 5;
+}
+
+inline bool isSolid(int blockId) {
+    return isSolidBlockFast[blockId & 0xFF];
+}
+
+bool checkPlayerCollision(const glm::vec3& feetPos) {
+    float halfWidth = PLAYER_WIDTH * 0.5f;
+    glm::vec3 minCorner = feetPos + glm::vec3(-halfWidth, 0.0f, -halfWidth);
+    glm::vec3 maxCorner = feetPos + glm::vec3( halfWidth, PLAYER_HEIGHT,  halfWidth);
+    
+    int minX = static_cast<int>(std::ceil(minCorner.x - 0.5f));
+    int maxX = static_cast<int>(std::floor(maxCorner.x + 0.5f));
+    int minY = static_cast<int>(std::ceil(minCorner.y - 0.5f));
+    int maxY = static_cast<int>(std::floor(maxCorner.y + 0.5f));
+    int minZ = static_cast<int>(std::ceil(minCorner.z - 0.5f));
+    int maxZ = static_cast<int>(std::floor(maxCorner.z + 0.5f));
+    
+    for (int x = minX; x <= maxX; ++x) {
+        for (int y = minY; y <= maxY; ++y) {
+            for (int z = minZ; z <= maxZ; ++z) {
+                int blockId = getBlockAt(x, y, z);
+                if (isSolid(blockId)) {
+                    glm::vec3 blockMin(x - 0.5f, y - 0.5f, z - 0.5f);
+                    glm::vec3 blockMax(x + 0.5f, y + 0.5f, z + 0.5f);
+                    if (minCorner.x <= blockMax.x && maxCorner.x >= blockMin.x &&
+                        minCorner.y <= blockMax.y && maxCorner.y >= blockMin.y &&
+                        minCorner.z <= blockMax.z && maxCorner.z >= blockMin.z) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool isOnGroundCheck(const glm::vec3& feetPos) {
+    glm::vec3 below = feetPos;
+    below.y -= 0.05f;
+    return checkPlayerCollision(below);
+}
+
+glm::vec3 applyCollision(const glm::vec3& oldFeetPos, const glm::vec3& delta) {
+    glm::vec3 newFeetPos = oldFeetPos;
+    glm::vec3 actualDelta(0.0f);
+    constexpr float COLLISION_STEP = 0.01f;
+    
+    newFeetPos.x += delta.x;
+    if (checkPlayerCollision(newFeetPos)) {
+        newFeetPos.x = oldFeetPos.x;
+        const float direction = (delta.x > 0.0f) ? 1.0f : -1.0f;
+        for (float t = COLLISION_STEP; t <= std::abs(delta.x); t += COLLISION_STEP) {
+            newFeetPos.x = oldFeetPos.x + direction * t;
+            if (checkPlayerCollision(newFeetPos)) {
+                newFeetPos.x -= direction * COLLISION_STEP;
+                break;
+            }
+        }
+    }
+    actualDelta.x = newFeetPos.x - oldFeetPos.x;
+    
+    newFeetPos.z += delta.z;
+    if (checkPlayerCollision(newFeetPos)) {
+        newFeetPos.z = oldFeetPos.z;
+        const float direction = (delta.z > 0.0f) ? 1.0f : -1.0f;
+        for (float t = COLLISION_STEP; t <= std::abs(delta.z); t += COLLISION_STEP) {
+            newFeetPos.z = oldFeetPos.z + direction * t;
+            if (checkPlayerCollision(newFeetPos)) {
+                newFeetPos.z -= direction * COLLISION_STEP;
+                break;
+            }
+        }
+    }
+    actualDelta.z = newFeetPos.z - oldFeetPos.z;
+    
+    newFeetPos.y += delta.y;
+    if (checkPlayerCollision(newFeetPos)) {
+        if (delta.y > 0.0f) playerVelocity.y = 0.0f;
+        else if (delta.y < 0.0f) playerVelocity.y = 0.0f;
+        newFeetPos.y = oldFeetPos.y;
+        const float direction = (delta.y > 0.0f) ? 1.0f : -1.0f;
+        for (float t = COLLISION_STEP; t <= std::abs(delta.y); t += COLLISION_STEP) {
+            newFeetPos.y = oldFeetPos.y + direction * t;
+            if (checkPlayerCollision(newFeetPos)) {
+                newFeetPos.y -= direction * COLLISION_STEP;
+                break;
+            }
+        }
+    }
+    actualDelta.y = newFeetPos.y - oldFeetPos.y;
+    
+    isOnGround = isOnGroundCheck(newFeetPos);
+    return actualDelta;
+}
+
+void placePlayerOnGround() {
+    glm::vec3 feetPos = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
+    while (feetPos.y > -10.0f && !checkPlayerCollision(feetPos)) {
+        feetPos.y -= 0.1f;
+    }
+    while (feetPos.y < CHUNK_SIZE_Y && checkPlayerCollision(feetPos)) {
+        feetPos.y += 0.05f;
+    }
+    feetPos.y -= 0.05f;
+    cameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
+    playerVelocity = glm::vec3(0.0f);
+    isOnGround = true;
+}
+
+// ----------------------------------------------------------------------
+// Типы блоков
+// ----------------------------------------------------------------------
+struct BlockType {
+    int id;
+    std::string name;
+    unsigned int textureID;
+};
+std::unordered_map<int, BlockType> blockTypes;
+int currentBlockType = 1;
+
+// ----------------------------------------------------------------------
+// Звуки
+// ----------------------------------------------------------------------
+struct SoundSet {
+    std::vector<sf::SoundBuffer> buffers;
+    bool empty() const { return buffers.empty(); }
+    const sf::SoundBuffer& getRandom() const {
+        static std::random_device rd;
+        static std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, buffers.size() - 1);
+        return buffers[dis(gen)];
+    }
+};
+extern bool gameStarted;
+class SoundManager {
+public:
+    SoundManager() {
+        // Устанавливаем относительную громкость для разных типов звуков
+        volumes["hit"] = 100.0f;
+        volumes["place"] = 80.0f;
+        volumes["step"] = 60.0f;
+        volumes["interact"] = 100.0f;
+    }
+
+    void loadSoundsForBlock(int blockId, const std::string& basePath, const std::string& pattern) {
+        std::string fullPattern = basePath + pattern;
+        std::regex re;
+        // Превращаем "*" в ".*" для регулярного выражения
+        std::string regexStr = std::regex_replace(pattern, std::regex("\\*"), ".*");
+        re = std::regex(regexStr, std::regex::icase);
+
+        for (const auto& entry : fs::directory_iterator(basePath)) {
+            if (entry.is_regular_file()) {
+                std::string filename = entry.path().filename().string();
+                if (std::regex_match(filename, re)) {
+                    sf::SoundBuffer buffer;
+                    if (buffer.loadFromFile(entry.path().string())) {
+                        soundSets[blockId][getCategoryFromPattern(pattern)].buffers.push_back(std::move(buffer));
+                    } else {
+                        std::cerr << "Failed to load sound: " << entry.path() << std::endl;
+                    }
+                }
+            }
+        }
+    }
+
+    void play(int blockId, const std::string& category) {
+        if (!gameStarted) return;
+        auto it = soundSets.find(blockId);
+        if (it == soundSets.end()) return;
+        auto catIt = it->second.find(category);
+        if (catIt == it->second.end() || catIt->second.empty()) return;
+    
+        static std::vector<std::unique_ptr<sf::Sound>> activeSounds;
+        // Удаляем остановленные звуки
+        activeSounds.erase(std::remove_if(activeSounds.begin(), activeSounds.end(),
+            [](const std::unique_ptr<sf::Sound>& s) { return s->getStatus() == sf::Sound::Status::Stopped; }), activeSounds.end());
+        if (activeSounds.size() > 32) return;
+    
+        auto sound = std::make_unique<sf::Sound>(catIt->second.getRandom());
+        sound->setVolume(volumes[category]);
+        sound->play();
+        activeSounds.push_back(std::move(sound));
+    }
+
+    void setVolume(const std::string& category, float vol) {
+        volumes[category] = vol;
+    }
+
+private:
+    std::unordered_map<int, std::unordered_map<std::string, SoundSet>> soundSets;
+    std::unordered_map<std::string, float> volumes;
+
+    std::string getCategoryFromPattern(const std::string& pattern) {
+        if (pattern.find("hit") != std::string::npos) return "hit";
+        if (pattern.find("place") != std::string::npos) return "place";
+        if (pattern.find("step") != std::string::npos) return "step";
+        if (pattern.find("interact") != std::string::npos) return "interact";
+        return "hit"; // по умолчанию
+    }
+};
+
+SoundManager soundManager;
+
+// ----------------------------------------------------------------------
+// Сохранение/загрузка чанков
+// ----------------------------------------------------------------------
+const std::string SAVE_DIR = "saves/world";
+const std::string CHUNKS_DIR = SAVE_DIR + "/chunks";
+
+struct ChunkHeader {
+    char magic[4];
+    uint32_t version;
+    int32_t cx;
+    int32_t cz;
+    uint32_t timestamp;
+    uint32_t blockCount;
+    uint32_t reserved;
+};
+
+struct PackedBlock {
+    uint16_t x;
+    uint16_t y;
+    uint16_t z;
+    uint8_t id;
+};
+
+struct hash_ivec2 {
+    size_t operator()(const glm::ivec2& v) const {
+        return ((v.x * 73856093) ^ (v.y * 19349663));
+    }
+};
+
+struct ChunkData {
+    glm::ivec2 pos;
+    std::vector<int> blocks;
+    bool valid = false;
+    ChunkData(int cx, int cz) : pos(cx, cz) {
+        blocks.resize(CHUNK_VOLUME, 0);
+    }
+};
+
+void saveChunkToFile(const glm::ivec2& pos, const std::vector<int>& blocks) {
+    if (!fs::exists(CHUNKS_DIR)) fs::create_directories(CHUNKS_DIR);
+    
+    std::string filename = CHUNKS_DIR + "/chunk_" + std::to_string(pos.x) + "_" + std::to_string(pos.y) + ".bin";
+    std::ofstream f(filename, std::ios::binary);
+    if (!f.is_open()) return;
+    
+    std::vector<PackedBlock> packedBlocks;
+    packedBlocks.reserve(CHUNK_VOLUME / 4);
+    for (int x = 0; x < CHUNK_SIZE_X; ++x)
+        for (int y = 0; y < CHUNK_SIZE_Y; ++y)
+            for (int z = 0; z < CHUNK_SIZE_Z; ++z) {
+                int id = blocks[(x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z];
+                if (id != 0) {
+                    PackedBlock pb;
+                    pb.x = static_cast<uint16_t>(x);
+                    pb.y = static_cast<uint16_t>(y);
+                    pb.z = static_cast<uint16_t>(z);
+                    pb.id = static_cast<uint8_t>(id);
+                    packedBlocks.push_back(pb);
+                }
+            }
+    
+    ChunkHeader header;
+    header.magic[0] = 'V'; header.magic[1] = 'O'; header.magic[2] = 'X'; header.magic[3] = 'C';
+    header.version = 1;
+    header.cx = pos.x;
+    header.cz = pos.y;
+    header.timestamp = static_cast<uint32_t>(std::time(nullptr));
+    header.blockCount = static_cast<uint32_t>(packedBlocks.size());
+    header.reserved = 0;
+    
+    f.write(reinterpret_cast<const char*>(&header), sizeof(header));
+    if (!packedBlocks.empty())
+        f.write(reinterpret_cast<const char*>(packedBlocks.data()), packedBlocks.size() * sizeof(PackedBlock));
+    f.close();
+}
+
+std::shared_ptr<ChunkData> loadChunkFromFile(int cx, int cz) {
+    auto data = std::make_shared<ChunkData>(cx, cz);
+    std::string filename = CHUNKS_DIR + "/chunk_" + std::to_string(cx) + "_" + std::to_string(cz) + ".bin";
+    std::ifstream f(filename, std::ios::binary);
+    if (!f.is_open()) return nullptr;
+    
+    ChunkHeader header;
+    f.read(reinterpret_cast<char*>(&header), sizeof(header));
+    if (header.magic[0] != 'V' || header.magic[1] != 'O' || header.magic[2] != 'X' || header.magic[3] != 'C') return nullptr;
+    if (header.version != 1) return nullptr;
+    
+    std::fill(data->blocks.begin(), data->blocks.end(), 0);
+    if (header.blockCount > 0) {
+        std::vector<PackedBlock> packedBlocks(header.blockCount);
+        f.read(reinterpret_cast<char*>(packedBlocks.data()), header.blockCount * sizeof(PackedBlock));
+        for (const auto& pb : packedBlocks) {
+            if (pb.x < CHUNK_SIZE_X && pb.y < CHUNK_SIZE_Y && pb.z < CHUNK_SIZE_Z)
+                data->blocks[(pb.x * CHUNK_SIZE_Y + pb.y) * CHUNK_SIZE_Z + pb.z] = pb.id;
+        }
+    }
+    data->valid = true;
+    return data;
+}
+
+void deleteOldWorld() {
+    if (fs::exists(CHUNKS_DIR))
+        for (const auto& entry : fs::directory_iterator(CHUNKS_DIR))
+            if (entry.is_regular_file()) fs::remove(entry.path());
+}
+
+void initWorldNoise() {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::uniform_int_distribution<> dis(0, 999999);
+    int seed = dis(gen);
+    
+    continentNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    continentNoise.SetFrequency(0.0008f);
+    continentNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
+    continentNoise.SetFractalOctaves(6);
+    continentNoise.SetFractalLacunarity(2.0f);
+    continentNoise.SetFractalGain(0.5f);
+    continentNoise.SetSeed(seed);
+
+    erosionNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    erosionNoise.SetFrequency(0.008f);
+    erosionNoise.SetFractalOctaves(4);
+    erosionNoise.SetFractalGain(0.5f);
+    erosionNoise.SetSeed(seed + 1);
+
+    mountainNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    mountainNoise.SetFrequency(0.004f);
+    mountainNoise.SetFractalOctaves(7);
+    mountainNoise.SetFractalGain(0.6f);
+    mountainNoise.SetFractalLacunarity(2.2f);
+    mountainNoise.SetSeed(seed + 2);
+
+    riverNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    riverNoise.SetFrequency(0.02f);
+    riverNoise.SetFractalOctaves(2);
+    riverNoise.SetSeed(seed + 3);
+
+    biomeTempNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    biomeTempNoise.SetFrequency(0.0006f);
+    biomeTempNoise.SetFractalOctaves(3);
+    biomeTempNoise.SetSeed(seed + 4);
+    
+    biomeHumidNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    biomeHumidNoise.SetFrequency(0.0006f);
+    biomeHumidNoise.SetFractalOctaves(3);
+    biomeHumidNoise.SetSeed(seed + 5);
+
+    detailNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    detailNoise.SetFrequency(0.04f);
+    detailNoise.SetFractalOctaves(3);
+    detailNoise.SetSeed(seed + 6);
+
+    treeNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    treeNoise.SetFrequency(0.08f);
+    treeNoise.SetSeed(seed + 7);
+
+    seaLevelNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    seaLevelNoise.SetFrequency(0.0003f);
+    seaLevelNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
+    seaLevelNoise.SetFractalOctaves(4);
+    seaLevelNoise.SetFractalLacunarity(2.0f);
+    seaLevelNoise.SetFractalGain(0.5f);
+    seaLevelNoise.SetSeed(seed + 8);
+
+    transitionNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    transitionNoise.SetFrequency(0.002f);
+    transitionNoise.SetFractalOctaves(2);
+    transitionNoise.SetSeed(seed + 9);
+}
+
+float getHeightAt(int wx, int wz, float& outBiomeTemp, float& outBiomeHumid, float& outWaterLevel) {
+    // 1. Температура и влажность для биомов
+    outBiomeTemp = biomeTempNoise.GetNoise((float)wx, (float)wz);
+    outBiomeHumid = biomeHumidNoise.GetNoise((float)wx, (float)wz);
+
+    // 2. Базовый континентальный шум (основная форма рельефа)
+    float continent = continentNoise.GetNoise((float)wx, (float)wz);
+    
+    // 3. Уровень моря плавно меняется
+    float seaNoise = seaLevelNoise.GetNoise((float)wx, (float)wz);
+    outWaterLevel = 62.0f + seaNoise * 8.0f;  // ~54..70, классический уровень моря ~63
+    outWaterLevel = glm::clamp(outWaterLevel, 45.0f, 75.0f);
+
+    // 4. Плавное преобразование континентального шума в базовую высоту
+    //    Используем гладкую интерполяцию вместо жёстких порогов
+    float t = (continent + 1.0f) * 0.5f;  // 0..1
+    // Применяем кривую для более естественного распределения (больше равнин, меньше гор)
+    t = glm::smoothstep(0.0f, 1.0f, t);
+    
+    // Минимальная и максимальная высота над уровнем моря
+    float minHeightOffset = -12.0f;   // океанские впадины
+    float maxHeightOffset = 40.0f;    // горные вершины
+    float heightOffset = glm::mix(minHeightOffset, maxHeightOffset, t);
+    
+    // Добавляем горный шум только там, где континент уже высокий
+    float mountain = 0.0f;
+    if (continent > 0.35f) {
+        float mountainFactor = (continent - 0.35f) / 0.65f;
+        mountain = mountainNoise.GetNoise((float)wx, (float)wz) * 18.0f * mountainFactor;
+    }
+
+    // Эрозия (добавляет реалистичные неровности)
+    float erosion = erosionNoise.GetNoise((float)wx, (float)wz) * 4.0f;
+    
+    // Детальный шум (мелкие холмики)
+    float detail = detailNoise.GetNoise((float)wx, (float)wz) * 1.5f;
+
+    // 5. Реки (мягкое понижение рельефа)
+    float river = riverNoise.GetNoise((float)wx, (float)wz);
+    float riverFactor = 0.0f;
+    if (std::abs(river) < 0.15f) {
+        // плавное углубление русла
+        float dist = 1.0f - (std::abs(river) / 0.15f);
+        riverFactor = -6.0f * dist * dist;
+    }
+
+    // Итоговая высота
+    float height = outWaterLevel + heightOffset + mountain + erosion + detail + riverFactor;
+
+    // Мягкое ограничение высоты, чтобы избежать выхода за пределы чанка
+    // Вместо жёсткого clamp, сжимаем диапазон в пределах [1, CHUNK_SIZE_Y-8]
+    float minH = 1.0f;
+    float maxH = CHUNK_SIZE_Y - 8.0f;
+    if (height < minH) height = minH + (height - minH) * 0.5f;
+    if (height > maxH) height = maxH - (maxH - height) * 0.5f;
+    height = glm::clamp(height, minH, maxH);
+
+    return height;
+}
+
+int getBiome(float temp, float humid, float height, float waterLevel) {
+    if (height <= waterLevel) {
+        float depth = waterLevel - height;
+        if (depth < 2.0f) return 6;   // пляж
+        if (depth < 8.0f) return 4;   // мелководье
+        return 5;                      // океан
+    }
+    if (height - waterLevel < 3.0f) return 6; // пляж
+
+    float t = (temp + 1.0f) * 0.5f;
+    float h = (humid + 1.0f) * 0.5f;
+
+    if (t < 0.2f) return 7;            // тундра
+    if (t > 0.7f && h > 0.5f) return 1; // джунгли
+    if (h < 0.3f) return 8;            // пустыня
+    if (height > waterLevel + 25.0f) return 2; // горы
+    return 0;                           // лес/равнины
+}
+
+bool isTreeNearby(int lx, int lz, int surfaceY, const std::vector<int>& blocks) {
+    for (int dx = -3; dx <= 3; ++dx)
+        for (int dz = -3; dz <= 3; ++dz) {
+            int x = lx + dx, z = lz + dz;
+            if (x < 0 || x >= CHUNK_SIZE_X || z < 0 || z >= CHUNK_SIZE_Z) continue;
+            for (int y = surfaceY; y <= surfaceY+1; ++y) {
+                if (y >= CHUNK_SIZE_Y) continue;
+                if (blocks[(x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z] == 6) return true;
+            }
+        }
+    return false;
+}
+
+void addTree(int cx, int cz, int lx, int lz, int surfaceY, std::vector<int>& blocks) {
+    int worldX = cx * CHUNK_SIZE_X + lx, worldZ = cz * CHUNK_SIZE_Z + lz;
+    float treeRand = treeNoise.GetNoise((float)worldX, (float)worldZ);
+    if (treeRand < 0.65f) return;
+    if (isTreeNearby(lx, lz, surfaceY, blocks)) return;
+
+    int trunkHeight = 4 + (static_cast<int>(treeRand * 100) % 2);
+    for (int h = 1; h <= trunkHeight; ++h) {
+        int y = surfaceY + h;
+        if (y >= CHUNK_SIZE_Y) return;
+        int idx = (lx * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + lz;
+        if (blocks[idx] == 0) blocks[idx] = 6;
+    }
+
+    auto setBlock = [&](int x, int y, int z, int type) {
+        if (x < 0 || x >= CHUNK_SIZE_X || z < 0 || z >= CHUNK_SIZE_Z || y < 0 || y >= CHUNK_SIZE_Y) return;
+        int idx = (x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z;
+        if (blocks[idx] == 0) blocks[idx] = type;
+    };
+
+    int baseY = surfaceY + trunkHeight;
+    struct Layer { int yOff; int radius; bool woodCenter; };
+    std::vector<Layer> layers;
+    if (trunkHeight == 4) layers = { {0,2,true}, {1,2,true}, {2,1,true}, {3,0,true} };
+    else layers = { {0,2,true}, {1,2,true}, {2,2,true}, {3,1,true}, {4,0,true} };
+
+    for (const auto& layer : layers) {
+        int y = baseY + layer.yOff;
+        if (y >= CHUNK_SIZE_Y) break;
+        if (layer.radius == 0) { setBlock(lx, y, lz, 6); continue; }
+        for (int dx = -layer.radius; dx <= layer.radius; ++dx)
+            for (int dz = -layer.radius; dz <= layer.radius; ++dz) {
+                if (abs(dx) == layer.radius && abs(dz) == layer.radius) continue;
+                int x = lx + dx, z = lz + dz;
+                if (dx == 0 && dz == 0) setBlock(x, y, z, 6);
+                else setBlock(x, y, z, 7);
+            }
+    }
+
+    std::mt19937 rng(worldX * 73856093 ^ worldZ * 19349663);
+    std::uniform_int_distribution<int> chance(0, 2);
+    for (int dy = 0; dy < 2; ++dy) {
+        int y = baseY + dy;
+        if (y >= CHUNK_SIZE_Y) break;
+        for (int dx = -2; dx <= 2; ++dx)
+            for (int dz = -2; dz <= 2; ++dz) {
+                if (abs(dx) == 2 && abs(dz) == 2) continue;
+                if (dx == 0 && dz == 0) continue;
+                int x = lx + dx, z = lz + dz;
+                if (x >= 0 && x < CHUNK_SIZE_X && z >= 0 && z < CHUNK_SIZE_Z) {
+                    int idx = (x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z;
+                    if (blocks[idx] == 0 && chance(rng) == 0) blocks[idx] = 7;
+                }
+            }
+    }
+}
+
+struct ColumnInfo { float height, biomeTemp, biomeHumid, waterLevel; int biome; };
+
+std::shared_ptr<ChunkData> generateChunk(int cx, int cz) {
+    auto data = std::make_shared<ChunkData>(cx, cz);
+    ColumnInfo columns[CHUNK_SIZE_X][CHUNK_SIZE_Z];
+    for (int x = 0; x < CHUNK_SIZE_X; ++x)
+        for (int z = 0; z < CHUNK_SIZE_Z; ++z) {
+            int worldX = cx * CHUNK_SIZE_X + x, worldZ = cz * CHUNK_SIZE_Z + z;
+            float temp, humid, water;
+            float landHeight = getHeightAt(worldX, worldZ, temp, humid, water);
+            int waterSurfaceY = (int)water, surfaceY = (int)landHeight;
+            surfaceY = std::clamp(surfaceY, 0, CHUNK_SIZE_Y - 1);
+            waterSurfaceY = std::clamp(waterSurfaceY, 0, CHUNK_SIZE_Y - 1);
+            int biome = getBiome(temp, humid, surfaceY, waterSurfaceY);
+            columns[x][z] = {landHeight, temp, humid, water, biome};
+        }
+    
+    for (int x = 0; x < CHUNK_SIZE_X; ++x)
+        for (int z = 0; z < CHUNK_SIZE_Z; ++z) {
+            const auto& col = columns[x][z];
+            int surfaceY = (int)col.height, waterSurfaceY = (int)col.waterLevel, biome = col.biome;
+            for (int y = 0; y < CHUNK_SIZE_Y; ++y) {
+                int blockId = 0;
+                if (biome == 3 || biome == 4 || biome == 5) {
+                    if (y == surfaceY) blockId = (biome == 5) ? 3 : 4;
+                    else if (y > surfaceY && y <= waterSurfaceY) blockId = 5;
+                    else if (y < surfaceY) blockId = (y > surfaceY - 4) ? 4 : 3;
+                } else if (biome == 6) {
+                    if (y == surfaceY) blockId = 4;
+                    else if (y < surfaceY) blockId = (y > surfaceY - 3) ? 4 : 3;
+                } else {
+                    if (y == surfaceY) {
+                        if (biome == 2 || biome == 7) blockId = 3;
+                        else if (biome == 8) blockId = 4;
+                        else blockId = 1;
+                    } else if (y > surfaceY - 4 && y < surfaceY) {
+                        if (biome == 2 || biome == 7) blockId = 3;
+                        else if (biome == 8) blockId = 4;
+                        else blockId = 2;
+                    } else if (y < surfaceY - 4) blockId = 3;
+                }
+                data->blocks[(x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z] = blockId;
+            }
+            if ((biome == 0 || biome == 1) && surfaceY > waterSurfaceY + 2)
+                addTree(cx, cz, x, z, surfaceY, data->blocks);
+        }
+    
+    for (int x = 0; x < CHUNK_SIZE_X; ++x)
+        for (int z = 0; z < CHUNK_SIZE_Z; ++z) {
+            const auto& col = columns[x][z];
+            float landHeight = col.height, waterLevel = col.waterLevel;
+            int surfaceY = (int)landHeight;
+            bool hasWaterNeighbor = false;
+            for (int dx = -1; dx <= 1 && !hasWaterNeighbor; ++dx)
+                for (int dz = -1; dz <= 1; ++dz) {
+                    if (dx == 0 && dz == 0) continue;
+                    int nx = x + dx, nz = z + dz;
+                    if (nx >= 0 && nx < CHUNK_SIZE_X && nz >= 0 && nz < CHUNK_SIZE_Z)
+                        if (columns[nx][nz].height <= columns[nx][nz].waterLevel)
+                            { hasWaterNeighbor = true; break; }
+                }
+            if (hasWaterNeighbor && landHeight > waterLevel && landHeight - waterLevel < 4.0f) {
+                int idx = (x * CHUNK_SIZE_Y + surfaceY) * CHUNK_SIZE_Z + z;
+                if (data->blocks[idx] == 1 || data->blocks[idx] == 2) data->blocks[idx] = 4;
+            }
+        }
+    data->valid = true;
+    return data;
+}
+
+// ----------------------------------------------------------------------
+// Фоновые задачи
+// ----------------------------------------------------------------------
+std::mutex chunkMutex;
+std::unordered_map<glm::ivec2, std::shared_ptr<ChunkData>, hash_ivec2> pendingData;
+std::unordered_set<glm::ivec2, hash_ivec2> pendingLoad;
+std::unordered_set<glm::ivec2, hash_ivec2> pendingGen;
+std::atomic<bool> workerRunning(true);
+std::thread workerThread;
+
+void workerFunction() {
+    while (workerRunning) {
+        int processed = 0;
+        {
+            std::unique_lock<std::mutex> lock(chunkMutex);
+            if (!pendingLoad.empty()) {
+                glm::ivec2 pos = *pendingLoad.begin(); pendingLoad.erase(pos);
+                lock.unlock();
+                auto data = loadChunkFromFile(pos.x, pos.y);
+                lock.lock();
+                if (data) pendingData[pos] = data;
+                else pendingGen.insert(pos);
+                processed++;
+            }
+        }
+        {
+            std::unique_lock<std::mutex> lock(chunkMutex);
+            while (!pendingGen.empty() && processed < 20) {
+                glm::ivec2 pos = *pendingGen.begin(); pendingGen.erase(pos);
+                lock.unlock();
+                auto data = generateChunk(pos.x, pos.y);
+                lock.lock();
+                pendingData[pos] = data;
+                processed++;
+            }
+        }
+        if (processed == 0) std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
+}
+
+// ----------------------------------------------------------------------
+// Шейдерные переменные
+// ----------------------------------------------------------------------
+unsigned int shaderProgram, reticleProgram, reticleVAO;
+int u_time_location, u_isWater_location, u_sunDir_location, u_sunIntensity_location, u_ambientBase_location;
+
+struct Chunk;
+std::unordered_map<glm::ivec2, Chunk, hash_ivec2> loadedChunks;
+
+static glm::vec3 lastCameraPosForWaterSort(0.0f);
+static std::vector<Chunk*> waterChunksCache;
+static bool waterChunksCacheValid = false;
+static Chunk* lastChunkForMesh = nullptr;
+static glm::ivec2 lastChunkCoordsForMesh(0,0);
+
+static GLint u_modelLoc = -1, u_viewLoc = -1, u_projLoc = -1;
+
+constexpr float DAY_DURATION_SECONDS = 60.0f;
+constexpr float NIGHT_DURATION_SECONDS = 60.0f;
+constexpr float FULL_CYCLE_SECONDS = DAY_DURATION_SECONDS + NIGHT_DURATION_SECONDS;
+
+// ----------------------------------------------------------------------
+// UI (меню и HUD)
+// ----------------------------------------------------------------------
+unsigned int uiShaderProgram;
+unsigned int uiVAO, uiVBO, uiEBO;
+unsigned int menuBackgroundTexture = 0, menuButtonTexture = 0, menuPhotoTexture = 0;
+unsigned int hotbarSlotTexture = 0, heartFullTexture = 0, heartHalfTexture = 0, hotbarSelTexture = 0, heartContTexture = 0;
+
+// Затемняющий шейдер и VAO
+unsigned int dimShaderProgram;
+unsigned int dimVAO;
+
+int currentHotbarSlot = 0;
+bool gamePaused = false;
+
+struct Button {
+    float relX, relY, relW, relH;
+    float absX, absY, absW, absH;
+    bool clicked;
+    const char* label;
+};
+
+Button buttons[3] = {
+    {0.5f, 0.5f, 0.25f, 0.09f, 0,0,0,0, false, "New Game"},
+    {0.5f, 0.6f, 0.25f, 0.09f, 0,0,0,0, false, "Load World"},
+    {0.5f, 0.7f, 0.25f, 0.09f, 0,0,0,0, false, "Exit"}
+};
+Button pauseResumeButton = {0.5f, 0.45f, 0.2f, 0.08f, 0,0,0,0, false, "Resume"};
+Button pauseExitButton   = {0.5f, 0.55f, 0.2f, 0.08f, 0,0,0,0, false, "Exit to Menu"};
+
+float photoRelX = 0.5f, photoRelY = 0.25f, photoRelW = 0.5f, photoRelH = 0.2f;
+float photoAbsX, photoAbsY, photoAbsW, photoAbsH;
+
+const char* uiVertexShaderSrc = R"(
+#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 aTexCoord;
+out vec2 TexCoord;
+uniform mat4 projection;
+uniform mat4 model;
+void main() {
+    gl_Position = projection * model * vec4(aPos, 0.0, 1.0);
+    TexCoord = aTexCoord;
+}
+)";
+
+const char* uiFragmentShaderSrc = R"(
+#version 330 core
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform sampler2D uTexture;
+uniform vec4 uColor = vec4(1.0);
+uniform bool uUseTexture = true;
+
+void main() {
+    if (uUseTexture) {
+        FragColor = texture(uTexture, TexCoord) * uColor;
+    } else {
+        FragColor = uColor;
+    }
+}
+)";
+
+// Шейдеры для затемнения
+const char* dimVertexShaderSrc = R"(
+#version 330 core
+layout (location = 0) in vec2 aPos;
+void main() {
+    gl_Position = vec4(aPos, 0.0, 1.0);
+}
+)";
+
+const char* dimFragmentShaderSrc = R"(
+#version 330 core
+out vec4 FragColor;
+uniform vec4 uColor;
+void main() {
+    FragColor = uColor;
+}
+)";
+
+void initUI() {
+    unsigned int vs = glCreateShader(GL_VERTEX_SHADER), fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs, 1, &uiVertexShaderSrc, NULL); glCompileShader(vs);
+    glShaderSource(fs, 1, &uiFragmentShaderSrc, NULL); glCompileShader(fs);
+    uiShaderProgram = glCreateProgram();
+    glAttachShader(uiShaderProgram, vs); glAttachShader(uiShaderProgram, fs);
+    glLinkProgram(uiShaderProgram);
+    glDeleteShader(vs); glDeleteShader(fs);
+
+    float vertices[] = { 0,0,0,1, 1,0,1,1, 1,1,1,0, 0,1,0,0 };
+    unsigned int indices[] = {0,1,2,0,2,3};
+    glGenVertexArrays(1, &uiVAO); glGenBuffers(1, &uiVBO); glGenBuffers(1, &uiEBO);
+    glBindVertexArray(uiVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, uiVBO); glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, uiEBO); glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)0); glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,4*sizeof(float),(void*)(2*sizeof(float))); glEnableVertexAttribArray(1);
+
+    // Инициализация VAO для затемнения (полноэкранный квад в NDC)
+    float quadVertices[] = {
+        -1.0f, -1.0f,
+         1.0f, -1.0f,
+         1.0f,  1.0f,
+        -1.0f,  1.0f
+    };
+    unsigned int quadIndices[] = {0, 1, 2, 0, 2, 3};
+    glGenVertexArrays(1, &dimVAO);
+    glBindVertexArray(dimVAO);
+    unsigned int dimVBO, dimEBO;
+    glGenBuffers(1, &dimVBO);
+    glGenBuffers(1, &dimEBO);
+    glBindBuffer(GL_ARRAY_BUFFER, dimVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), quadVertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, dimEBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(quadIndices), quadIndices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glBindVertexArray(0);
+}
+
+unsigned int loadUITexture(const char* path) {
+    unsigned int tex = 0;
+    int w, h, ch;
+    unsigned char* data = stbi_load(path, &w, &h, &ch, 4);
+    if (data) {
+        glGenTextures(1, &tex); glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+        stbi_image_free(data);
+    } else std::cerr << "Failed to load UI texture: " << path << std::endl;
+    return tex;
+}
+
+void loadMenuTextures() {
+    menuBackgroundTexture = loadUITexture("textures/menu_background.jpg");
+    menuButtonTexture      = loadUITexture("textures/menu_button.png");
+    menuPhotoTexture       = loadUITexture("textures/menu_photo.png");
+}
+
+void loadHUDTextures() {
+    hotbarSlotTexture = loadUITexture("textures/hotbar_slot.png");
+    heartFullTexture  = loadUITexture("textures/heart_full.png");
+    heartHalfTexture  = loadUITexture("textures/heart_half.png");
+    hotbarSelTexture  = loadUITexture("textures/hotbar_sel.png");
+    heartContTexture  = loadUITexture("textures/heart_cont.png");
+}
+
+void updateButtonPositions(int screenW, int screenH) {
+    for (int i=0; i<3; ++i) {
+        buttons[i].absW = buttons[i].relW * screenW;
+        buttons[i].absH = buttons[i].relH * screenH;
+        buttons[i].absX = buttons[i].relX * screenW - buttons[i].absW/2;
+        buttons[i].absY = buttons[i].relY * screenH - buttons[i].absH/2;
+    }
+    // Кнопки паузы
+    pauseResumeButton.absW = pauseResumeButton.relW * screenW;
+    pauseResumeButton.absH = pauseResumeButton.relH * screenH;
+    pauseResumeButton.absX = pauseResumeButton.relX * screenW - pauseResumeButton.absW/2;
+    pauseResumeButton.absY = pauseResumeButton.relY * screenH - pauseResumeButton.absH/2;
+
+    pauseExitButton.absW = pauseExitButton.relW * screenW;
+    pauseExitButton.absH = pauseExitButton.relH * screenH;
+    pauseExitButton.absX = pauseExitButton.relX * screenW - pauseExitButton.absW/2;
+    pauseExitButton.absY = pauseExitButton.relY * screenH - pauseExitButton.absH/2;
+}
+
+void updatePhotoPosition(int screenW, int screenH) {
+    photoAbsW = photoRelW * screenW; photoAbsH = photoRelH * screenH;
+    photoAbsX = photoRelX * screenW - photoAbsW / 2;
+    photoAbsY = photoRelY * screenH - photoAbsH / 2;
+}
+
+void drawRectangle(float x, float y, float w, float h, unsigned int texture, int screenW, int screenH) {
+    glm::mat4 proj = glm::ortho(0.0f, (float)screenW, (float)screenH, 0.0f);
+    glUseProgram(uiShaderProgram);
+    glUniform1i(glGetUniformLocation(uiShaderProgram, "uUseTexture"), 1);
+    glUniformMatrix4fv(glGetUniformLocation(uiShaderProgram,"projection"),1,GL_FALSE,glm::value_ptr(proj));
+    glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(x,y,0));
+    model = glm::scale(model, glm::vec3(w,h,1));
+    glUniformMatrix4fv(glGetUniformLocation(uiShaderProgram,"model"),1,GL_FALSE,glm::value_ptr(model));
+    glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, texture);
+    glUniform1i(glGetUniformLocation(uiShaderProgram,"uTexture"),0);
+    glBindVertexArray(uiVAO); glDrawElements(GL_TRIANGLES,6,GL_UNSIGNED_INT,0);
+}
+
+void drawHUD(int screenW, int screenH) {
+    if (!hotbarSlotTexture || !heartFullTexture || !heartHalfTexture || !hotbarSelTexture || !heartContTexture) return;
+
+    GLboolean depthTest = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean blend = glIsEnabled(GL_BLEND);
+    GLboolean cull = glIsEnabled(GL_CULL_FACE);
+    glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE); glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    const int SLOT_SIZE = 60, SLOT_SPACING = -4, HOTBAR_SLOTS = 9;
+    int totalWidth = HOTBAR_SLOTS * SLOT_SIZE + (HOTBAR_SLOTS - 1) * SLOT_SPACING;
+    int startX = (screenW - totalWidth) / 2, startY = screenH - SLOT_SIZE;
+
+    for (int i = 0; i < HOTBAR_SLOTS; ++i)
+        drawRectangle(startX + i * (SLOT_SIZE + SLOT_SPACING), startY, SLOT_SIZE, SLOT_SIZE, hotbarSlotTexture, screenW, screenH);
+
+    {
+        int selX = startX + currentHotbarSlot * (SLOT_SIZE + SLOT_SPACING);
+        int selW = SLOT_SIZE + 5, selH = SLOT_SIZE + 5, offsetX = -3, offsetY = -2;
+        drawRectangle(selX + offsetX, startY + offsetY, selW, selH, hotbarSelTexture, screenW, screenH);
+    }
+
+    const int HEART_SIZE = 25, HEART_SPACING = -3;
+    int heartsTotal = MAX_PLAYER_HEALTH / 2;
+    int heartsX = startX, heartsY = startY - HEART_SIZE - 5;
+
+    for (int i = 0; i < heartsTotal; ++i) {
+        int healthRemaining = playerHealth - i * 2;
+        unsigned int tex = 0;
+        if (healthRemaining >= 2) tex = heartFullTexture;
+        else if (healthRemaining == 1) tex = heartHalfTexture;
+        else break;
+        int x = heartsX + i * (HEART_SIZE + HEART_SPACING);
+        drawRectangle(x, heartsY, HEART_SIZE, HEART_SIZE, heartContTexture, screenW, screenH);
+        drawRectangle(x, heartsY, HEART_SIZE, HEART_SIZE, tex, screenW, screenH);
+    }
+
+    if (depthTest) glEnable(GL_DEPTH_TEST);
+    if (!blend) glDisable(GL_BLEND);
+    if (cull) glEnable(GL_CULL_FACE);
+}
+
+// ----------------------------------------------------------------------
+// Музыка
+// ----------------------------------------------------------------------
+std::vector<std::string> musicFiles;
+sf::Music currentMusic;
+int currentTrackIndex = -1;
+bool musicPlaying = false, musicTransitioning = false;
+float trackStartTime = 0.0f;
+
+void playRandomMusic() {
+    if (musicFiles.empty() || musicTransitioning) return;
+    musicTransitioning = true;
+    static std::random_device rd; static std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, (int)musicFiles.size() - 1);
+    int newIndex = dis(gen);
+    if (newIndex == currentTrackIndex && musicFiles.size() > 1) newIndex = (newIndex + 1) % musicFiles.size();
+    currentTrackIndex = newIndex;
+    std::string path = musicFiles[currentTrackIndex];
+    currentMusic.stop();
+    if (currentMusic.openFromFile(path)) { currentMusic.play(); musicPlaying = true; trackStartTime = glfwGetTime(); }
+    musicTransitioning = false;
+}
+void stopMusic() { musicPlaying = false; musicTransitioning = false; currentMusic.stop(); }
+void startMusic() { if (musicFiles.empty()) return; musicPlaying = true; playRandomMusic(); }
+void scanMusicFolder() {
+    std::string musicDir = "music";
+    if (!fs::exists(musicDir)) fs::create_directory(musicDir);
+    for (const auto& entry : fs::directory_iterator(musicDir))
+        if (entry.is_regular_file()) {
+            std::string ext = entry.path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            if (ext == ".wav" || ext == ".ogg" || ext == ".flac" || ext == ".mp3")
+                musicFiles.push_back(entry.path().string());
+        }
+}
+void updateMusic() {
+    if (!musicPlaying || musicTransitioning) return;
+    if (currentMusic.getStatus() == sf::SoundSource::Status::Stopped && glfwGetTime() - trackStartTime > 3.0f) {
+        musicPlaying = false; playRandomMusic();
+    }
+}
+
+// ----------------------------------------------------------------------
+// Структура чанка
+// ----------------------------------------------------------------------
+struct Chunk {
+    glm::ivec2 pos;
+    std::shared_ptr<ChunkData> data;
+    unsigned int vao[256] = {0}, vbo[256] = {0};
+    size_t vertexCount[256] = {0};
+    bool meshReady = false, dirty = false;
+
+    Chunk(int cx, int cz, bool loadFromFile) : pos(cx, cz) {
+        std::lock_guard<std::mutex> lock(chunkMutex);
+        if (loadFromFile) {
+            std::string filename = CHUNKS_DIR + "/chunk_" + std::to_string(cx) + "_" + std::to_string(cz) + ".bin";
+            if (fs::exists(filename)) pendingLoad.insert(pos);
+            else pendingGen.insert(pos);
+        } else pendingGen.insert(pos);
+    }
+    ~Chunk() { for (int i=0; i<256; ++i) if (vao[i]) { glDeleteVertexArrays(1, &vao[i]); glDeleteBuffers(1, &vbo[i]); } }
+
+    bool updateData() {
+        if (data) return true;
+        std::lock_guard<std::mutex> lock(chunkMutex);
+        auto it = pendingData.find(pos);
+        if (it != pendingData.end()) {
+            data = it->second; pendingData.erase(it);
+            meshReady = false; dirty = false; invalidateNeighbors();
+            return true;
+        }
+        return false;
+    }
+    void invalidateNeighbors() {
+        glm::ivec2 neighbors[4] = {{pos.x-1,pos.y},{pos.x+1,pos.y},{pos.x,pos.y-1},{pos.x,pos.y+1}};
+        for (auto& npos : neighbors) {
+            auto it = loadedChunks.find(npos);
+            if (it != loadedChunks.end()) it->second.meshReady = false;
+        }
+    }
+    int getLocalBlock(int x, int y, int z) const { return data ? data->blocks[(x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z] : 0; }
+    void setLocalBlock(int x, int y, int z, int id) {
+        if (!data) return;
+        data->blocks[(x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z] = id;
+        meshReady = false; dirty = true;
+    }
+
+    void buildMesh() {
+        if (!data) return;
+        for (int i=0; i<256; ++i) if (vao[i]) { glDeleteVertexArrays(1, &vao[i]); glDeleteBuffers(1, &vbo[i]); vao[i]=vbo[i]=0; vertexCount[i]=0; }
+        std::unordered_map<int, std::vector<float>> verticesPerType;
+        const float leftFace[] = { -0.5f,-0.5f,-0.5f, -0.5f,-0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,-0.5f, -0.5f,-0.5f,-0.5f };
+        const float rightFace[] = { 0.5f,-0.5f,0.5f, 0.5f,-0.5f,-0.5f, 0.5f,0.5f,-0.5f, 0.5f,0.5f,-0.5f, 0.5f,0.5f,0.5f, 0.5f,-0.5f,0.5f };
+        const float bottomFace[] = { -0.5f,-0.5f,-0.5f, 0.5f,-0.5f,-0.5f, 0.5f,-0.5f,0.5f, 0.5f,-0.5f,0.5f, -0.5f,-0.5f,0.5f, -0.5f,-0.5f,-0.5f };
+        const float topFace[] = { -0.5f,0.5f,0.5f, 0.5f,0.5f,0.5f, 0.5f,0.5f,-0.5f, 0.5f,0.5f,-0.5f, -0.5f,0.5f,-0.5f, -0.5f,0.5f,0.5f };
+        const float frontFace[] = { -0.5f,-0.5f,0.5f, 0.5f,-0.5f,0.5f, 0.5f,0.5f,0.5f, 0.5f,0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,-0.5f,0.5f };
+        const float backFace[] = { 0.5f,-0.5f,-0.5f, -0.5f,-0.5f,-0.5f, -0.5f,0.5f,-0.5f, -0.5f,0.5f,-0.5f, 0.5f,0.5f,-0.5f, 0.5f,-0.5f,-0.5f };
+        const float baseUV[] = { 0,0, 1,0, 1,1, 1,1, 0,1, 0,0 };
+        for (int x=0; x<CHUNK_SIZE_X; ++x) for (int y=0; y<CHUNK_SIZE_Y; ++y) for (int z=0; z<CHUNK_SIZE_Z; ++z) {
+            int type = getLocalBlock(x,y,z); if (type==0) continue;
+            float ox = pos.x*CHUNK_SIZE_X + x, oy = y, oz = pos.y*CHUNK_SIZE_Z + z;
+            auto addFace = [&](const float* face, float uOff, const glm::vec3& n, std::vector<float>& out) {
+                for (int i=0; i<18; i+=3) {
+                    out.push_back(face[i]+ox); out.push_back(face[i+1]+oy); out.push_back(face[i+2]+oz);
+                    int uvIdx = (i/3)*2; float u = baseUV[uvIdx], v = baseUV[uvIdx+1];
+                    if (uOff == 1.0f/3.0f) v = 1.0f - v;
+                    out.push_back(uOff + u*(1.0f/3.0f)); out.push_back(v);
+                    out.push_back(n.x); out.push_back(n.y); out.push_back(n.z); out.push_back(1.0f);
+                }
+            };
+            std::vector<float>& verts = verticesPerType[type];
+            int neighbor;
+            if (type==5) {
+                neighbor=getBlockAtForMesh(ox-1,oy,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(leftFace,1.0f/3.0f,glm::vec3(-1,0,0),verts);
+                neighbor=getBlockAtForMesh(ox+1,oy,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(rightFace,1.0f/3.0f,glm::vec3(1,0,0),verts);
+                neighbor=getBlockAtForMesh(ox,oy,oz+1); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(frontFace,1.0f/3.0f,glm::vec3(0,0,1),verts);
+                neighbor=getBlockAtForMesh(ox,oy,oz-1); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(backFace,1.0f/3.0f,glm::vec3(0,0,-1),verts);
+                neighbor=getBlockAtForMesh(ox,oy+1,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(topFace,0.0f,glm::vec3(0,1,0),verts);
+                neighbor=getBlockAtForMesh(ox,oy-1,oz); if(neighbor!=5&&neighbor!=BLOCK_UNKNOWN) addFace(bottomFace,2.0f/3.0f,glm::vec3(0,-1,0),verts);
+            } else {
+                neighbor=getBlockAtForMesh(ox-1,oy,oz); if(neighbor==0||neighbor==5) addFace(leftFace,1.0f/3.0f,glm::vec3(-1,0,0),verts);
+                neighbor=getBlockAtForMesh(ox+1,oy,oz); if(neighbor==0||neighbor==5) addFace(rightFace,1.0f/3.0f,glm::vec3(1,0,0),verts);
+                neighbor=getBlockAtForMesh(ox,oy,oz+1); if(neighbor==0||neighbor==5) addFace(frontFace,1.0f/3.0f,glm::vec3(0,0,1),verts);
+                neighbor=getBlockAtForMesh(ox,oy,oz-1); if(neighbor==0||neighbor==5) addFace(backFace,1.0f/3.0f,glm::vec3(0,0,-1),verts);
+                neighbor=getBlockAtForMesh(ox,oy+1,oz); if(neighbor==0||neighbor==5) addFace(topFace,0.0f,glm::vec3(0,1,0),verts);
+                neighbor=getBlockAtForMesh(ox,oy-1,oz); if(neighbor==0||neighbor==5) addFace(bottomFace,2.0f/3.0f,glm::vec3(0,-1,0),verts);
+            }
+        }
+        for (auto& [type, verts] : verticesPerType) {
+            if (verts.empty()) continue;
+            glGenVertexArrays(1, &vao[type]); glGenBuffers(1, &vbo[type]);
+            glBindVertexArray(vao[type]); glBindBuffer(GL_ARRAY_BUFFER, vbo[type]);
+            glBufferData(GL_ARRAY_BUFFER, verts.size()*sizeof(float), verts.data(), GL_STATIC_DRAW);
+            glVertexAttribPointer(0,3,GL_FLOAT,GL_FALSE,9*sizeof(float),(void*)0); glEnableVertexAttribArray(0);
+            glVertexAttribPointer(1,2,GL_FLOAT,GL_FALSE,9*sizeof(float),(void*)(3*sizeof(float))); glEnableVertexAttribArray(1);
+            glVertexAttribPointer(2,3,GL_FLOAT,GL_FALSE,9*sizeof(float),(void*)(5*sizeof(float))); glEnableVertexAttribArray(2);
+            glVertexAttribPointer(3,1,GL_FLOAT,GL_FALSE,9*sizeof(float),(void*)(8*sizeof(float))); glEnableVertexAttribArray(3);
+            vertexCount[type] = verts.size() / 9;
+        }
+        meshReady = true;
+    }
+
+    void render() {
+        if (!data) return; if (!meshReady) buildMesh(); if (!meshReady) return;
+        for (int type=0; type<256; ++type) {
+            if (type==5 || !vao[type]) continue;
+            auto it = blockTypes.find(type); if (it==blockTypes.end()) continue;
+            glUniform1i(u_isWater_location, 0);
+            glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, it->second.textureID);
+            glBindVertexArray(vao[type]); glDrawArrays(GL_TRIANGLES, 0, vertexCount[type]);
+        }
+    }
+    void renderWater() {
+        if (!meshReady) buildMesh(); if (!vao[5]) return;
+        glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); glDepthMask(GL_FALSE);
+        glUniform1i(u_isWater_location, 1);
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, blockTypes[5].textureID);
+        glBindVertexArray(vao[5]); glDrawArrays(GL_TRIANGLES, 0, vertexCount[5]);
+        glDepthMask(GL_TRUE); glDisable(GL_BLEND);
+    }
+    void saveAsync() {
+        if (!dirty || !data) return; dirty = false;
+        std::vector<int> blocksCopy = data->blocks; glm::ivec2 posCopy = pos;
+        std::thread([posCopy, blocksCopy]() { saveChunkToFile(posCopy, blocksCopy); }).detach();
+    }
+};
+
+int getBlockAtForMesh(int wx, int wy, int wz) {
+    if (wy<0 || wy>=CHUNK_SIZE_Y) return 0;
+    int cx = (wx>=0) ? wx/CHUNK_SIZE_X : (wx-CHUNK_SIZE_X+1)/CHUNK_SIZE_X;
+    int cz = (wz>=0) ? wz/CHUNK_SIZE_Z : (wz-CHUNK_SIZE_Z+1)/CHUNK_SIZE_Z;
+    if (lastChunkForMesh && lastChunkCoordsForMesh.x==cx && lastChunkCoordsForMesh.y==cz) {
+        int lx = wx - cx*CHUNK_SIZE_X, lz = wz - cz*CHUNK_SIZE_Z;
+        if (lx>=0&&lx<CHUNK_SIZE_X && lz>=0&&lz<CHUNK_SIZE_Z) return lastChunkForMesh->getLocalBlock(lx,wy,lz);
+        return BLOCK_UNKNOWN;
+    }
+    auto it = loadedChunks.find({cx,cz});
+    if (it != loadedChunks.end()) {
+        lastChunkForMesh = &it->second; lastChunkCoordsForMesh = {cx,cz};
+        int lx = wx - cx*CHUNK_SIZE_X, lz = wz - cz*CHUNK_SIZE_Z;
+        if (lx>=0&&lx<CHUNK_SIZE_X && lz>=0&&lz<CHUNK_SIZE_Z) return it->second.getLocalBlock(lx,wy,lz);
+    }
+    return BLOCK_UNKNOWN;
+}
+int getBlockAt(int wx, int wy, int wz) {
+    if (wy<0||wy>=CHUNK_SIZE_Y) return 0;
+    int cx = (wx>=0) ? wx/CHUNK_SIZE_X : (wx-CHUNK_SIZE_X+1)/CHUNK_SIZE_X;
+    int cz = (wz>=0) ? wz/CHUNK_SIZE_Z : (wz-CHUNK_SIZE_Z+1)/CHUNK_SIZE_Z;
+    auto it = loadedChunks.find({cx,cz}); if (it==loadedChunks.end()) return 0;
+    int lx = wx - cx*CHUNK_SIZE_X, lz = wz - cz*CHUNK_SIZE_Z;
+    return it->second.getLocalBlock(lx,wy,lz);
+}
+void setBlockAt(int wx, int wy, int wz, int type) {
+    if (wy<0||wy>=CHUNK_SIZE_Y) return;
+    int cx = (wx>=0) ? wx/CHUNK_SIZE_X : (wx-CHUNK_SIZE_X+1)/CHUNK_SIZE_X;
+    int cz = (wz>=0) ? wz/CHUNK_SIZE_Z : (wz-CHUNK_SIZE_Z+1)/CHUNK_SIZE_Z;
+    auto it = loadedChunks.find({cx,cz}); if (it==loadedChunks.end()) return;
+    int lx = wx - cx*CHUNK_SIZE_X, lz = wz - cz*CHUNK_SIZE_Z;
+    it->second.setLocalBlock(lx,wy,lz,type);
+    if (lx==0) { auto n=loadedChunks.find({cx-1,cz}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
+    if (lx==CHUNK_SIZE_X-1) { auto n=loadedChunks.find({cx+1,cz}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
+    if (lz==0) { auto n=loadedChunks.find({cx,cz-1}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
+    if (lz==CHUNK_SIZE_Z-1) { auto n=loadedChunks.find({cx,cz+1}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
+    waterChunksCacheValid = false;
+}
+void exitToMenu(GLFWwindow* window, int& sw, int& sh);
+void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
+    int centerCX = (int)std::floor(cameraPos.x / CHUNK_SIZE_X);
+    int centerCZ = (int)std::floor(cameraPos.z / CHUNK_SIZE_Z);
+    const int LOAD_RADIUS = 13;
+    std::unordered_set<glm::ivec2, hash_ivec2> needed;
+    for (int dx=-LOAD_RADIUS; dx<=LOAD_RADIUS; ++dx)
+        for (int dz=-LOAD_RADIUS; dz<=LOAD_RADIUS; ++dz)
+            needed.insert({centerCX+dx, centerCZ+dz});
+    bool changed = false;
+    for (auto it=loadedChunks.begin(); it!=loadedChunks.end(); ) {
+        if (needed.find(it->first)==needed.end()) { it->second.saveAsync(); it=loadedChunks.erase(it); changed=true; }
+        else ++it;
+    }
+    for (const auto& key : needed)
+        if (loadedChunks.find(key)==loadedChunks.end()) {
+            loadedChunks.emplace(std::piecewise_construct, std::forward_as_tuple(key.x,key.y), std::forward_as_tuple(key.x,key.y,loadFromFile));
+            changed=true;
+        }
+    for (auto& pair : loadedChunks) pair.second.updateData();
+    if (changed) waterChunksCacheValid = false;
+}
+void updateWaterChunksCache() {
+    if (waterChunksCacheValid) return;
+    waterChunksCache.clear();
+    for (auto& pair : loadedChunks) if (pair.second.vao[5]) waterChunksCache.push_back(&pair.second);
+    waterChunksCacheValid = true;
+}
+void saveAllChunks() { for (auto& p : loadedChunks) if (p.second.dirty) p.second.saveAsync(); std::this_thread::sleep_for(std::chrono::milliseconds(2000)); }
+
+unsigned int loadTextureStrip(const char* path, bool forceAlpha = false) {
+    unsigned int tex; glGenTextures(1,&tex); glBindTexture(GL_TEXTURE_2D,tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    int w,h,c; unsigned char* data = stbi_load(path, &w, &h, &c, forceAlpha?4:0);
+    if (data) {
+        GLenum fmt = (forceAlpha||c==4) ? GL_RGBA : GL_RGB;
+        glTexImage2D(GL_TEXTURE_2D,0,fmt,w,h,0,fmt,GL_UNSIGNED_BYTE,data); glGenerateMipmap(GL_TEXTURE_2D);
+    } else { unsigned char d[4]={255,255,255,255}; glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,1,1,0,GL_RGBA,GL_UNSIGNED_BYTE,d); }
+    stbi_image_free(data); return tex;
+}
+bool loadBlockConfig(const std::string& path) {
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+    json data = json::parse(f);
+    for (auto& item : data["blocks"]) {
+        BlockType bt;
+        bt.id = item["id"];
+        bt.name = item["name"];
+        std::string texPath = item["texture_strip"];
+        bt.textureID = loadTextureStrip(texPath.c_str(), bt.id==5);
+        blockTypes[bt.id] = bt;
+        isSolidBlockFast[bt.id] = (bt.id!=0 && bt.id!=5);
+
+        // Загрузка звуков
+        if (item.contains("sounds")) {
+            for (auto& [category, pattern] : item["sounds"].items()) {
+                std::string patternStr = pattern;
+                std::cout << "Loading sounds for block " << bt.id << " (" << bt.name << "), category: " << category << ", pattern: " << patternStr << std::endl;
+                soundManager.loadSoundsForBlock(bt.id, "sounds/", patternStr);
+            }
+        } else {
+            std::cout << "No sounds defined for block " << bt.id << " (" << bt.name << ")" << std::endl;
+        }
+    }
+    return !blockTypes.empty();
+}
+
+bool rayCast(glm::vec3 origin, glm::vec3 dir, int& hx, int& hy, int& hz, int& face, float maxDist) {
+    dir = glm::normalize(dir);
+    glm::ivec3 pos((int)std::floor(origin.x+0.5f), (int)std::floor(origin.y+0.5f), (int)std::floor(origin.z+0.5f));
+    glm::ivec3 step; step.x = (dir.x>0)?1:(dir.x<0)?-1:0; step.y = (dir.y>0)?1:(dir.y<0)?-1:0; step.z = (dir.z>0)?1:(dir.z<0)?-1:0;
+    float tDeltaX = (dir.x!=0)?fabs(1.0f/dir.x):INFINITY, tDeltaY = (dir.y!=0)?fabs(1.0f/dir.y):INFINITY, tDeltaZ = (dir.z!=0)?fabs(1.0f/dir.z):INFINITY;
+    float tMaxX, tMaxY, tMaxZ;
+    if (dir.x>0) tMaxX = ((pos.x+0.5f)-origin.x)/dir.x; else if (dir.x<0) tMaxX = ((pos.x-0.5f)-origin.x)/dir.x; else tMaxX=INFINITY;
+    if (dir.y>0) tMaxY = ((pos.y+0.5f)-origin.y)/dir.y; else if (dir.y<0) tMaxY = ((pos.y-0.5f)-origin.y)/dir.y; else tMaxY=INFINITY;
+    if (dir.z>0) tMaxZ = ((pos.z+0.5f)-origin.z)/dir.z; else if (dir.z<0) tMaxZ = ((pos.z-0.5f)-origin.z)/dir.z; else tMaxZ=INFINITY;
+    for (int i=0; i<200; ++i) {
+        int block = getBlockAt(pos.x,pos.y,pos.z);
+        if (block!=0 && block!=5) { hx=pos.x; hy=pos.y; hz=pos.z; return true; }
+        if (tMaxX <= tMaxY && tMaxX <= tMaxZ) { if (tMaxX>maxDist) break; pos.x+=step.x; face=(dir.x>0)?1:0; tMaxX+=tDeltaX; }
+        else if (tMaxY <= tMaxX && tMaxY <= tMaxZ) { if (tMaxY>maxDist) break; pos.y+=step.y; face=(dir.y>0)?3:2; tMaxY+=tDeltaY; }
+        else { if (tMaxZ>maxDist) break; pos.z+=step.z; face=(dir.z>0)?5:4; tMaxZ+=tDeltaZ; }
+    }
+    return false;
+}
+
+bool gameStarted = false, isLoadingGame = false, movementEnabled = false, playerPlaced = false;
+float loadingTimer = 0.0f;
+double mouseX=0, mouseY=0;
+int currentScreenW=SCR_WIDTH, currentScreenH=SCR_HEIGHT;
+float stepSoundTimer = 0.0f;
+const float STEP_SOUND_INTERVAL = 0.4f;
+
+void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
+    if (!gameStarted && button==GLFW_MOUSE_BUTTON_LEFT && action==GLFW_PRESS) {
+        int w,h; glfwGetWindowSize(window,&w,&h);
+        for (int i=0;i<3;++i)
+            if (mouseX>=buttons[i].absX && mouseX<=buttons[i].absX+buttons[i].absW &&
+                mouseY>=buttons[i].absY && mouseY<=buttons[i].absY+buttons[i].absH) buttons[i].clicked=true;
+        return;
+    }
+    // Обработка кнопок паузы
+    if (gameStarted && gamePaused && button==GLFW_MOUSE_BUTTON_LEFT && action==GLFW_PRESS) {
+        int w, h; glfwGetWindowSize(window, &w, &h);
+        // Resume
+        if (mouseX >= pauseResumeButton.absX && mouseX <= pauseResumeButton.absX + pauseResumeButton.absW &&
+            mouseY >= pauseResumeButton.absY && mouseY <= pauseResumeButton.absY + pauseResumeButton.absH) {
+            gamePaused = false;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            glfwGetCursorPos(window, &lastX, &lastY);
+            firstMouse = true;
+            return;
+        }
+        // Exit to Menu
+        if (mouseX >= pauseExitButton.absX && mouseX <= pauseExitButton.absX + pauseExitButton.absW &&
+            mouseY >= pauseExitButton.absY && mouseY <= pauseExitButton.absY + pauseExitButton.absH) {
+            exitToMenu(window, currentScreenW, currentScreenH);
+            return;
+        }
+    }
+    if (!gameStarted || gamePaused || action!=GLFW_PRESS || !movementEnabled) return;
+    glm::vec3 rayDir = cameraFront;
+    int hx,hy,hz,face;
+    if (rayCast(cameraPos, rayDir, hx,hy,hz,face, 10.0f)) {
+        if (button==GLFW_MOUSE_BUTTON_LEFT) {
+            int blockType = getBlockAt(hx,hy,hz);
+            if (blockType==5) return;
+            setBlockAt(hx,hy,hz,0);
+            soundManager.play(blockType, "hit");
+        } else if (button==GLFW_MOUSE_BUTTON_RIGHT) {
+            int nx=hx, ny=hy, nz=hz;
+            switch(face) { case 0:nx=hx+1;break; case 1:nx=hx-1;break; case 2:ny=hy+1;break; case 3:ny=hy-1;break; case 4:nz=hz+1;break; case 5:nz=hz-1;break; }
+            if (getBlockAt(nx,ny,nz)!=0 && getBlockAt(nx,ny,nz)!=5) return;
+            setBlockAt(nx,ny,nz, currentBlockType);
+            soundManager.play(currentBlockType, "place");
+        }
+    }
+}
+
+void exitToMenu(GLFWwindow* window, int& sw, int& sh) {
+    gameStarted=false; movementEnabled=false; playerPlaced=false; loadingTimer=0.0f; gamePaused=false;
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    loadedChunks.clear(); waterChunksCache.clear(); waterChunksCacheValid=false;
+    { std::lock_guard<std::mutex> lock(chunkMutex); pendingData.clear(); pendingLoad.clear(); pendingGen.clear(); }
+    lastChunkForMesh=nullptr; lastChunkCoordsForMesh=glm::ivec2(0,0);
+    workerRunning=false; if(workerThread.joinable()) workerThread.join(); workerRunning=true;
+    glfwGetWindowSize(window, &sw, &sh); updateButtonPositions(sw,sh); updatePhotoPosition(sw,sh);
+    stopMusic(); playerVelocity=glm::vec3(0.0f); isOnGround=false;
+    cameraPos=glm::vec3(0.0f,200.0f,0.0f); yaw=-90.0f; pitch=0.0f; cameraFront=glm::vec3(0,0,-1); firstMouse=true;
+}
+
+bool areChunksReady() {
+    int ccx = (int)std::floor(cameraPos.x/CHUNK_SIZE_X), ccz = (int)std::floor(cameraPos.z/CHUNK_SIZE_Z);
+    for (int dx=-5; dx<=5; ++dx) for (int dz=-5; dz<=5; ++dz) {
+        auto it = loadedChunks.find({ccx+dx, ccz+dz});
+        if (it==loadedChunks.end() || !it->second.data || !it->second.meshReady) return false;
+    }
+    return true;
+}
+
+void processInput(GLFWwindow *window) {
+    static bool escWasPressed = false;
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        if (!escWasPressed) {
+            gamePaused = !gamePaused;
+            if (gamePaused) glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            else { glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); glfwGetCursorPos(window, &lastX, &lastY); firstMouse=true; }
+        }
+        escWasPressed = true;
+    } else escWasPressed = false;
+
+    if (!gameStarted || !movementEnabled || gamePaused) return;
+
+    float moveSpeed = WALK_SPEED;
+    glm::vec3 moveDir(0.0f);
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) moveDir += cameraFront;
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) moveDir -= cameraFront;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) moveDir -= glm::normalize(glm::cross(cameraFront, cameraUp));
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) moveDir += glm::normalize(glm::cross(cameraFront, cameraUp));
+    
+    bool moving = glm::length(moveDir) > 0.1f;
+    if (moving) moveDir = glm::normalize(moveDir);
+    glm::vec3 desiredMove = moveDir * moveSpeed * deltaTime;
+    
+    if (glfwGetKey(window, GLFW_KEY_SPACE)==GLFW_PRESS && isOnGround) {
+        playerVelocity.y = JUMP_POWER;
+        isOnGround = false;
+    }
+    
+    playerVelocity.y += GRAVITY * deltaTime;
+    glm::vec3 delta = desiredMove;
+    delta.y = playerVelocity.y * deltaTime;
+    
+    glm::vec3 feetPos = cameraPos - glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
+    glm::vec3 actualDelta = applyCollision(feetPos, delta);
+    feetPos += actualDelta;
+    cameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
+    
+    if (feetPos.y < 0.0f) {
+        feetPos.y = 0.0f;
+        cameraPos = feetPos + glm::vec3(0,EYE_HEIGHT,0);
+        playerVelocity.y = 0;
+        isOnGround = true;
+    }
+
+    // Звуки шагов
+    if (isOnGround && moving) {
+        stepSoundTimer += deltaTime;
+        if (stepSoundTimer >= STEP_SOUND_INTERVAL) {
+            stepSoundTimer -= STEP_SOUND_INTERVAL;
+            int blockBelow = getBlockAt(floor(cameraPos.x), floor(feetPos.y - 0.1f), floor(cameraPos.z));
+            if (blockBelow != 0 && blockBelow != 5) {
+                soundManager.play(blockBelow, "step");
+            }
+        }
+    } else {
+        stepSoundTimer = 0.0f;
+    }
+
+    for (int i=0;i<8;++i) if (glfwGetKey(window, GLFW_KEY_1+i)==GLFW_PRESS) currentHotbarSlot = i;
+    if (glfwGetKey(window, GLFW_KEY_9)==GLFW_PRESS) currentBlockType = 9;
+    for (int i=1;i<=9;++i) if (glfwGetKey(window, GLFW_KEY_0+i)==GLFW_PRESS && blockTypes.count(i)) currentBlockType = i;
+}
+
+const char *vertexShaderSource = R"(
+#version 330 core
+layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec2 aTexCoord;
+layout (location = 2) in vec3 aNormal;
+layout (location = 3) in float aSkyLight;
+out vec2 TexCoord; out vec3 FragPos; out vec3 Normal; out float SkyLight;
+uniform mat4 model; uniform mat4 view; uniform mat4 projection;
+void main() {
+    vec4 worldPos = model * vec4(aPos, 1.0);
+    gl_Position = projection * view * worldPos;
+    TexCoord = aTexCoord; FragPos = worldPos.xyz;
+    Normal = mat3(transpose(inverse(model))) * aNormal;
+    SkyLight = aSkyLight;
+}
+)";
+const char *fragmentShaderSource = R"(
+#version 330 core
+in vec2 TexCoord; out vec4 FragColor;
+uniform sampler2D ourTexture; uniform float u_time; uniform int u_isWater;
+uniform vec3 u_sunDir; uniform float u_sunIntensity; uniform float u_ambientBase;
+in vec3 FragPos; in vec3 Normal; in float SkyLight;
+void main() {
+    vec2 uv = TexCoord;
+    if (u_isWater == 1) {
+        float frames = 32.0, speed = 0.7;
+        float frame = fract(u_time * speed) * frames;
+        uv.y = uv.y / frames + floor(frame) / frames;
+    }
+    vec4 color = texture(ourTexture, uv); if (u_isWater==1) color.a = 0.7;
+    vec3 n = normalize(Normal); vec3 lightDir = normalize(-u_sunDir);
+    float diffuse = max(dot(n, lightDir), 0.0) * u_sunIntensity;
+    float caveDarkness = mix(0.08, 1.0, clamp(SkyLight,0.0,1.0));
+    float lighting = clamp((u_ambientBase + diffuse) * caveDarkness, 0.03, 1.0);
+    if (u_isWater==1) lighting = max(lighting, 0.12);
+    FragColor = vec4(color.rgb * lighting, color.a);
+}
+)";
+const char *reticleVertexSource = R"(#version 330 core
+void main() { gl_PointSize = 10.0; gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }
+)";
+const char *reticleFragmentSource = R"(#version 330 core
+out vec4 FragColor;
+void main() { vec2 c = gl_PointCoord; if (length(c-0.5)>0.4) discard; FragColor=vec4(1.0); }
+)";
+void checkShaderErrors(unsigned int s, const std::string& t) { int ok; glGetShaderiv(s,GL_COMPILE_STATUS,&ok); if(!ok){char l[512]; glGetShaderInfoLog(s,512,NULL,l); std::cerr<<t<<" error:\n"<<l<<std::endl;}}
+void checkProgramErrors(unsigned int p) { int ok; glGetProgramiv(p,GL_LINK_STATUS,&ok); if(!ok){char l[512]; glGetProgramInfoLog(p,512,NULL,l); std::cerr<<"Link error:\n"<<l<<std::endl;}}
+void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb, glm::vec3& sky) {
+    float cycle = fmod(t, FULL_CYCLE_SECONDS) / FULL_CYCLE_SECONDS;
+    float angle = cycle * glm::two_pi<float>() - glm::half_pi<float>();
+    sunDir = glm::normalize(glm::vec3(cos(angle), sin(angle), 0.35f));
+    float daylight = glm::clamp(sunDir.y * 1.15f + 0.15f, 0.0f, 1.0f);
+    daylight = daylight * daylight * (3.0f - 2.0f*daylight);
+    sunInt = 0.08f + daylight * 0.92f; amb = 0.04f + daylight * 0.34f;
+    sky = glm::mix(glm::vec3(0.02,0.03,0.08), glm::vec3(0.53,0.81,0.92), daylight);
+}
+void initReticle() {
+    unsigned int vs = glCreateShader(GL_VERTEX_SHADER), fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs,1,&reticleVertexSource,NULL); glCompileShader(vs);
+    glShaderSource(fs,1,&reticleFragmentSource,NULL); glCompileShader(fs);
+    reticleProgram = glCreateProgram(); glAttachShader(reticleProgram,vs); glAttachShader(reticleProgram,fs);
+    glLinkProgram(reticleProgram); checkProgramErrors(reticleProgram);
+    glDeleteShader(vs); glDeleteShader(fs); glGenVertexArrays(1,&reticleVAO); glBindVertexArray(reticleVAO); glBindVertexArray(0);
+}
+int main() {
+    glfwInit(); glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR,3); glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR,3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE,GLFW_OPENGL_CORE_PROFILE); glfwWindowHint(GLFW_ALPHA_BITS,8);
+    GLFWmonitor* mon = glfwGetPrimaryMonitor(); const GLFWvidmode* mode = glfwGetVideoMode(mon);
+    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+    GLFWwindow* window = glfwCreateWindow(mode->width, mode->height, "Voxel Builder", NULL, NULL);
+    if (!window) { glfwTerminate(); return -1; }
+    glfwSetWindowPos(window,0,0); glfwMakeContextCurrent(window);
+    glfwSetFramebufferSizeCallback(window, [](GLFWwindow*,int w,int h){ glViewport(0,0,w,h); });
+    glfwSetCursorPosCallback(window, [](GLFWwindow*, double x, double y){
+        mouseX=x; mouseY=y; if(!gameStarted||gamePaused) return;
+        if(firstMouse){ lastX=x; lastY=y; firstMouse=false; }
+        float xoff = x - lastX, yoff = lastY - y; lastX=x; lastY=y;
+        xoff*=0.1f; yoff*=0.1f; yaw+=xoff; pitch+=yoff;
+        if(pitch>89.0f) pitch=89.0f; if(pitch<-89.0f) pitch=-89.0f;
+        glm::vec3 front; front.x=cos(glm::radians(yaw))*cos(glm::radians(pitch));
+        front.y=sin(glm::radians(pitch)); front.z=sin(glm::radians(yaw))*cos(glm::radians(pitch));
+        cameraFront = glm::normalize(front);
+    });
+    glfwSetMouseButtonCallback(window, mouse_button_callback);
+    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    glfwSetWindowCloseCallback(window, [](GLFWwindow*){ if(gameStarted) saveAllChunks(); });
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
+    glEnable(GL_CULL_FACE); glCullFace(GL_BACK); glFrontFace(GL_CCW); glEnable(GL_DEPTH_TEST);
+
+    unsigned int vs = glCreateShader(GL_VERTEX_SHADER), fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs,1,&vertexShaderSource,NULL); glCompileShader(vs); checkShaderErrors(vs,"vertex");
+    glShaderSource(fs,1,&fragmentShaderSource,NULL); glCompileShader(fs); checkShaderErrors(fs,"fragment");
+    shaderProgram = glCreateProgram(); glAttachShader(shaderProgram,vs); glAttachShader(shaderProgram,fs);
+    glLinkProgram(shaderProgram); checkProgramErrors(shaderProgram);
+    glDeleteShader(vs); glDeleteShader(fs); glUseProgram(shaderProgram);
+    glUniform1i(glGetUniformLocation(shaderProgram,"ourTexture"),0);
+    u_time_location = glGetUniformLocation(shaderProgram,"u_time");
+    u_isWater_location = glGetUniformLocation(shaderProgram,"u_isWater");
+    u_sunDir_location = glGetUniformLocation(shaderProgram,"u_sunDir");
+    u_sunIntensity_location = glGetUniformLocation(shaderProgram,"u_sunIntensity");
+    u_ambientBase_location = glGetUniformLocation(shaderProgram,"u_ambientBase");
+    u_modelLoc = glGetUniformLocation(shaderProgram,"model");
+    u_viewLoc = glGetUniformLocation(shaderProgram,"view");
+    u_projLoc = glGetUniformLocation(shaderProgram,"projection");
+
+    if (!loadBlockConfig("blocks.json")) return -1;
+    initUI(); loadMenuTextures(); loadHUDTextures();
+
+    // Компиляция затемняющего шейдера
+    unsigned int dimVS = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(dimVS, 1, &dimVertexShaderSrc, NULL); glCompileShader(dimVS);
+    unsigned int dimFS = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(dimFS, 1, &dimFragmentShaderSrc, NULL); glCompileShader(dimFS);
+    dimShaderProgram = glCreateProgram();
+    glAttachShader(dimShaderProgram, dimVS);
+    glAttachShader(dimShaderProgram, dimFS);
+    glLinkProgram(dimShaderProgram);
+    glDeleteShader(dimVS);
+    glDeleteShader(dimFS);
+
+    int screenW = mode->width, screenH = mode->height; currentScreenW=screenW; currentScreenH=screenH;
+    updateButtonPositions(screenW,screenH); updatePhotoPosition(screenW,screenH);
+    scanMusicFolder(); gameStarted=false;
+
+    while (!glfwWindowShouldClose(window)) {
+        float now = glfwGetTime();
+        if (!gamePaused) { deltaTime = now - lastFrame; lastFrame = now; } else deltaTime = 0.0f;
+        if (deltaTime > 0.1f) deltaTime = 0.1f;
+
+        if (!gameStarted) {
+            glClearColor(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+            glDisable(GL_DEPTH_TEST); glDisable(GL_CULL_FACE); glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            if (menuBackgroundTexture) drawRectangle(0,0,screenW,screenH,menuBackgroundTexture,screenW,screenH);
+            if (menuPhotoTexture) drawRectangle(photoAbsX,photoAbsY,photoAbsW,photoAbsH,menuPhotoTexture,screenW,screenH);
+            for (int i=0;i<3;++i) if(menuButtonTexture) drawRectangle(buttons[i].absX,buttons[i].absY,buttons[i].absW,buttons[i].absH,menuButtonTexture,screenW,screenH);
+            glDisable(GL_BLEND); glEnable(GL_DEPTH_TEST); glEnable(GL_CULL_FACE);
+            if (buttons[0].clicked) { buttons[0].clicked=false; gameStarted=true; movementEnabled=false; playerPlaced=false; loadingTimer=0; isLoadingGame=false;
+                deleteOldWorld(); initWorldNoise(); workerThread = std::thread(workerFunction);
+                updateChunksAroundCamera(cameraPos,false); initReticle(); startMusic();
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); }
+            if (buttons[1].clicked) { buttons[1].clicked=false; gameStarted=true; movementEnabled=false; playerPlaced=false; loadingTimer=0; isLoadingGame=true;
+                initWorldNoise(); workerThread = std::thread(workerFunction); updateChunksAroundCamera(cameraPos,true); initReticle(); startMusic();
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED); }
+            if (buttons[2].clicked) break;
+        } else {
+            glfwGetWindowSize(window, &currentScreenW, &currentScreenH);
+            updateChunksAroundCamera(cameraPos, isLoadingGame);
+            if (!movementEnabled) { loadingTimer += deltaTime; if (areChunksReady()) { if (!playerPlaced) { placePlayerOnGround(); playerPlaced=true; } movementEnabled=true; } }
+            if (movementEnabled) processInput(window);
+            updateMusic();
+
+            float currentTime = gamePaused ? lastFrame : now;
+            glm::vec3 sunDir, skyColor; float sunIntensity, ambientBase;
+            evaluateDayNightCycle(currentTime, sunDir, sunIntensity, ambientBase, skyColor);
+
+            glClearColor(skyColor.r, skyColor.g, skyColor.b, 1.0f); glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+            glm::mat4 model(1.0f), view = glm::lookAt(cameraPos, cameraPos+cameraFront, cameraUp);
+            int w,h; glfwGetWindowSize(window,&w,&h);
+            glm::mat4 proj = glm::perspective(glm::radians(65.0f), (float)w/h, 0.1f, 1000.0f);
+            glUseProgram(shaderProgram);
+            glUniformMatrix4fv(u_modelLoc,1,GL_FALSE,glm::value_ptr(model));
+            glUniformMatrix4fv(u_viewLoc,1,GL_FALSE,glm::value_ptr(view));
+            glUniformMatrix4fv(u_projLoc,1,GL_FALSE,glm::value_ptr(proj));
+            glUniform1f(u_time_location, currentTime);
+            glUniform3fv(u_sunDir_location,1,glm::value_ptr(sunDir));
+            glUniform1f(u_sunIntensity_location, sunIntensity);
+            glUniform1f(u_ambientBase_location, ambientBase);
+            for (auto& p : loadedChunks) p.second.render();
+            updateWaterChunksCache();
+            if (glm::distance(cameraPos, lastCameraPosForWaterSort) > 0.5f) {
+                std::sort(waterChunksCache.begin(), waterChunksCache.end(), [&](Chunk* a, Chunk* b){
+                    glm::vec3 ca(a->pos.x*CHUNK_SIZE_X+CHUNK_SIZE_X/2,30,a->pos.y*CHUNK_SIZE_Z+CHUNK_SIZE_Z/2);
+                    glm::vec3 cb(b->pos.x*CHUNK_SIZE_X+CHUNK_SIZE_X/2,30,b->pos.y*CHUNK_SIZE_Z+CHUNK_SIZE_Z/2);
+                    return glm::distance(cameraPos, ca) > glm::distance(cameraPos, cb);
+                });
+                lastCameraPosForWaterSort = cameraPos;
+            }
+            for (Chunk* ch : waterChunksCache) ch->renderWater();
+
+            // HUD
+            glDisable(GL_DEPTH_TEST);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            drawHUD(currentScreenW, currentScreenH);
+            glDisable(GL_BLEND);
+            glEnable(GL_DEPTH_TEST);
+
+            // Прицел
+            glUseProgram(reticleProgram);
+            glBindVertexArray(reticleVAO);
+            glDrawArrays(GL_POINTS,0,1);
+
+            // Затемнение и меню паузы (поверх всего)
+            if (gamePaused) {
+                // ------------------------------------------------------------
+                // 1. СОХРАНЯЕМ ТЕКУЩЕЕ СОСТОЯНИЕ OPENGL
+                // ------------------------------------------------------------
+                GLboolean depthWasEnabled = glIsEnabled(GL_DEPTH_TEST);
+                GLboolean blendWasEnabled = glIsEnabled(GL_BLEND);
+                GLboolean cullWasEnabled = glIsEnabled(GL_CULL_FACE);
+                GLint prevBlendSrc, prevBlendDst;
+                glGetIntegerv(GL_BLEND_SRC_ALPHA, &prevBlendSrc);
+                glGetIntegerv(GL_BLEND_DST_ALPHA, &prevBlendDst);
+            
+                // ------------------------------------------------------------
+                // 2. ЗАТЕМНЯЮЩИЙ КВАД (NDC, отдельный шейдер)
+                // ------------------------------------------------------------
+                glDisable(GL_DEPTH_TEST);
+                glDisable(GL_CULL_FACE);
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            
+                glUseProgram(dimShaderProgram);
+                glUniform4f(glGetUniformLocation(dimShaderProgram, "uColor"), 0.0f, 0.0f, 0.0f, 0.5f);
+                glBindVertexArray(dimVAO);
+                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+            
+                // ------------------------------------------------------------
+                // 3. РИСУЕМ КНОПКИ МЕНЮ ПАУЗЫ
+                //    ВАЖНО: depth test остаётся выключенным!
+                // ------------------------------------------------------------
+                glUseProgram(uiShaderProgram);
+            
+                // Устанавливаем ортографическую проекцию на всё окно
+                glm::mat4 proj = glm::ortho(0.0f, (float)currentScreenW, (float)currentScreenH, 0.0f);
+                glUniformMatrix4fv(glGetUniformLocation(uiShaderProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
+            
+                // Включаем текстурирование и сбрасываем цвет
+                glUniform1i(glGetUniformLocation(uiShaderProgram, "uUseTexture"), 1);
+                glUniform4f(glGetUniformLocation(uiShaderProgram, "uColor"), 1.0f, 1.0f, 1.0f, 1.0f);
+            
+                // Привязываем VAO для UI (квадрат 0,0 -> 1,1)
+                glBindVertexArray(uiVAO);
+            
+                // Активный текстурный юнит
+                glActiveTexture(GL_TEXTURE0);
+                // Убеждаемся, что текстурный юнит 0 используется в шейдере
+                glUniform1i(glGetUniformLocation(uiShaderProgram, "uTexture"), 0);
+            
+                if (menuButtonTexture) {
+                    // Кнопка Resume
+                    glm::mat4 modelResume = glm::translate(glm::mat4(1.0f), glm::vec3(pauseResumeButton.absX, pauseResumeButton.absY, 0.0f));
+                    modelResume = glm::scale(modelResume, glm::vec3(pauseResumeButton.absW, pauseResumeButton.absH, 1.0f));
+                    glUniformMatrix4fv(glGetUniformLocation(uiShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(modelResume));
+                    glBindTexture(GL_TEXTURE_2D, menuButtonTexture);
+                    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+            
+                    // Кнопка Exit to Menu
+                    glm::mat4 modelExit = glm::translate(glm::mat4(1.0f), glm::vec3(pauseExitButton.absX, pauseExitButton.absY, 0.0f));
+                    modelExit = glm::scale(modelExit, glm::vec3(pauseExitButton.absW, pauseExitButton.absH, 1.0f));
+                    glUniformMatrix4fv(glGetUniformLocation(uiShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(modelExit));
+                    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+                } else {
+                    // Запасной вариант: цветные прямоугольники (если текстура не загрузилась)
+                    glUniform1i(glGetUniformLocation(uiShaderProgram, "uUseTexture"), 0);
+            
+                    // Resume (зелёный)
+                    glUniform4f(glGetUniformLocation(uiShaderProgram, "uColor"), 0.0f, 1.0f, 0.0f, 1.0f);
+                    glm::mat4 modelResume = glm::translate(glm::mat4(1.0f), glm::vec3(pauseResumeButton.absX, pauseResumeButton.absY, 0.0f));
+                    modelResume = glm::scale(modelResume, glm::vec3(pauseResumeButton.absW, pauseResumeButton.absH, 1.0f));
+                    glUniformMatrix4fv(glGetUniformLocation(uiShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(modelResume));
+                    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+            
+                    // Exit (красный)
+                    glUniform4f(glGetUniformLocation(uiShaderProgram, "uColor"), 1.0f, 0.0f, 0.0f, 1.0f);
+                    glm::mat4 modelExit = glm::translate(glm::mat4(1.0f), glm::vec3(pauseExitButton.absX, pauseExitButton.absY, 0.0f));
+                    modelExit = glm::scale(modelExit, glm::vec3(pauseExitButton.absW, pauseExitButton.absH, 1.0f));
+                    glUniformMatrix4fv(glGetUniformLocation(uiShaderProgram, "model"), 1, GL_FALSE, glm::value_ptr(modelExit));
+                    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+            
+                    // Возвращаем режим текстуры и цвет
+                    glUniform1i(glGetUniformLocation(uiShaderProgram, "uUseTexture"), 1);
+                    glUniform4f(glGetUniformLocation(uiShaderProgram, "uColor"), 1.0f, 1.0f, 1.0f, 1.0f);
+                }
+            
+                // ------------------------------------------------------------
+                // 4. ВОССТАНАВЛИВАЕМ СОСТОЯНИЕ OPENGL
+                // ------------------------------------------------------------
+                glBindVertexArray(0);
+                glBindTexture(GL_TEXTURE_2D, 0);
+            
+                if (blendWasEnabled) glEnable(GL_BLEND); else glDisable(GL_BLEND);
+                glBlendFunc(prevBlendSrc, prevBlendDst);
+            
+                if (cullWasEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+            
+                // ВАЖНО: Depth test включаем только сейчас, после отрисовки всего UI
+                if (depthWasEnabled) glEnable(GL_DEPTH_TEST);
+                else glDisable(GL_DEPTH_TEST);
+            }
+        }
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    }
+    if (gameStarted) { saveAllChunks(); workerRunning=false; if(workerThread.joinable()) workerThread.join(); }
+    stopMusic();
+    glDeleteTextures(1,&menuBackgroundTexture); glDeleteTextures(1,&menuButtonTexture); glDeleteTextures(1,&menuPhotoTexture);
+    glDeleteTextures(1,&hotbarSlotTexture); glDeleteTextures(1,&heartFullTexture); glDeleteTextures(1,&heartHalfTexture);
+    glDeleteTextures(1,&hotbarSelTexture); glDeleteTextures(1,&heartContTexture);
+    glDeleteVertexArrays(1,&uiVAO); glDeleteBuffers(1,&uiVBO); glDeleteBuffers(1,&uiEBO); glDeleteProgram(uiShaderProgram);
+    glDeleteVertexArrays(1, &dimVAO); glDeleteProgram(dimShaderProgram);
+    for (auto& p : blockTypes) glDeleteTextures(1,&p.second.textureID);
+    glDeleteProgram(shaderProgram); glDeleteVertexArrays(1,&reticleVAO); glDeleteProgram(reticleProgram);
+    glfwTerminate(); return 0;
+}

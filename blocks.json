@@ -3,7 +3,7 @@
       {
         "id": 2,
         "name": "dirt",
-        "texture_strip": "textures/blocks/dirt_strip.png",
+        "texture_strip": "textures/blocks/dirt.png",
         "transparent": false,
         "texture_parts": 3
       },
@@ -16,7 +16,7 @@
       {
         "id":3,
         "name": "stone",
-        "texture_strip": "textures/blocks/stone_strip.png",
+        "texture_strip": "textures/blocks/stone.png",
         "transparent": false,
         "sounds":{
           "step": "Stone_step*.ogg"
@@ -26,7 +26,7 @@
       {
         "id": 1,
         "name": "grass",
-        "texture_strip":"textures/blocks/grass_strip.png",
+        "texture_strip":"textures/blocks/grass.png",
         "transparent": false,
         "sounds": {
           "step": "Grass_step*.ogg"
@@ -36,7 +36,7 @@
       {
         "id":4,
         "name": "sand",
-        "texture_strip":"textures/blocks/sand_strip.png",
+        "texture_strip":"textures/blocks/sand.png",
         "transparent": false,
         "sounds":{
           "step": "Sand_step*.ogg"
@@ -46,21 +46,21 @@
       {
         "id": 6,
         "name": "oak_log",
-        "texture_strip":"textures/blocks/oak_log_strip.png",
+        "texture_strip":"textures/blocks/oak_log.png",
         "transparent": false,
         "texture_parts": 3
       },
       {
         "id": 7,
         "name": "oak_leaves",
-        "texture_strip": "textures/blocks/oak_leaves_strip.png",
+        "texture_strip": "textures/blocks/oak_leaves.png",
         "transparent": true,
         "texture_parts": 3
       },
       {
         "id": 8,
         "name": "glowstone",
-        "texture_strip": "textures/blocks/glowstone_strip.png",
+        "texture_strip": "textures/blocks/glowstone.png",
         "transparent": false,
         "texture_parts": 3,
         "light": 12
@@ -68,22 +68,29 @@
       {
         "id": 9,
         "name": "cobblestone",
-        "texture_strip": "textures/blocks/cobblestone_strip.png",
+        "texture_strip": "textures/blocks/cobblestone.png",
         "transparent": false,
         "texture_parts": 3
       },
       {
         "id": 10,
         "name": "oak_planks",
-        "texture_strip": "textures/blocks/oak_planks_strip.png",
+        "texture_strip": "textures/blocks/oak_planks.png",
         "transparent": false,
         "texture_parts": 3
       },
       {
         "id": 11,
         "name": "spruce_planks",
-        "texture_strip": "textures/blocks/spruce_planks.png",
+        "texture_strip": "textures/blocks/planks_spruce.png",
         "transparent": false,
+        "texture_parts": 3
+      },
+      {
+        "id":12,
+        "name": "glass",
+        "texture_strip":"textures/blocks/glass.png",
+        "transparent":true,
         "texture_parts": 3
       }
     ]

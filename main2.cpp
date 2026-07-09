@@ -1603,6 +1603,8 @@ static std::vector<Chunk*> waterChunksCache;
 static std::vector<Chunk*> alphaChunksCache;
 static bool waterChunksCacheValid = false;
 static bool alphaChunksCacheValid = false;
+static std::queue<glm::ivec2> pendingBlockLightRebuildChunks;
+static std::unordered_set<glm::ivec2, hash_ivec2> queuedBlockLightRebuildChunks;
 static Chunk* lastChunkForMesh = nullptr;
 static glm::ivec2 lastChunkCoordsForMesh(0,0);
 
@@ -4096,6 +4098,47 @@ int getBlockUnderCamera(const glm::vec3& cameraPosition, const glm::vec3& feetPo
     glm::vec3 samplePoint(cameraPosition.x, feetPosition.y - 0.1f, cameraPosition.z);
     return getBlockAtPoint(samplePoint);
 }
+
+bool chunkDataNeedsBlockLightRebuild(const std::shared_ptr<ChunkData>& data) {
+    if (!data || maxBlockLightRadius <= 0) return false;
+
+    bool hasEmitter = false;
+    bool hasSpreadLight = false;
+    for (int idx = 0; idx < CHUNK_VOLUME; ++idx) {
+        int blockId = data->blocks[idx];
+        int emission = (blockId >= 0 && blockId < 256) ? blockLightEmission[blockId] : 0;
+        if (emission > 0) hasEmitter = true;
+        if (data->blockLight[idx] > emission) {
+            hasSpreadLight = true;
+            break;
+        }
+    }
+
+    return hasEmitter && !hasSpreadLight;
+}
+
+void scheduleBlockLightRebuild(const glm::ivec2& chunkPos) {
+    if (queuedBlockLightRebuildChunks.insert(chunkPos).second) {
+        pendingBlockLightRebuildChunks.push(chunkPos);
+    }
+}
+
+void processPendingBlockLightRebuilds(int maxPerFrame) {
+    int processed = 0;
+    while (processed < maxPerFrame && !pendingBlockLightRebuildChunks.empty()) {
+        glm::ivec2 chunkPos = pendingBlockLightRebuildChunks.front();
+        pendingBlockLightRebuildChunks.pop();
+        queuedBlockLightRebuildChunks.erase(chunkPos);
+
+        auto loadedIt = loadedChunks.find(chunkPos);
+        if (loadedIt == loadedChunks.end() || !loadedIt->second.data) continue;
+
+        loadedIt->second.meshReady = false;
+        loadedIt->second.invalidateNeighbors();
+        rebuildBlockLightAroundChunk(chunkPos.x, chunkPos.y);
+        ++processed;
+    }
+}
 void setBlockAt(int wx, int wy, int wz, int type) {
     if (wy<0||wy>=CHUNK_SIZE_Y) return;
     int cx = (wx>=0) ? wx/CHUNK_SIZE_X : (wx-CHUNK_SIZE_X+1)/CHUNK_SIZE_X;
@@ -4138,11 +4181,10 @@ void integratePendingChunkData(int maxPerFrame) {
         loadedIt->second.meshReady = false;
         loadedIt->second.dirty = false;
         loadedIt->second.invalidateNeighbors();
-        integratedChunks.push_back(chunkPos);
-    }
 
-    for (const glm::ivec2& chunkPos : integratedChunks) {
-        rebuildBlockLightAroundChunk(chunkPos.x, chunkPos.y);
+        if (chunkDataNeedsBlockLightRebuild(chunkData)) {
+            scheduleBlockLightRebuild(chunkPos);
+        }
     }
 }
 
@@ -4153,6 +4195,7 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
 
     const int integrateBudget = fastChunkLoadingMode ? 24 : 2;
     integratePendingChunkData(integrateBudget);
+    processPendingBlockLightRebuilds(fastChunkLoadingMode ? 2 : 1);
 
     if (!loadedChunks.empty() && lastRequestedCenter.x == centerCX && lastRequestedCenter.y == centerCZ) {
         return;

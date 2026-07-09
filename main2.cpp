@@ -157,6 +157,7 @@ void initReticle();
 void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb, glm::vec3& sky);
 void checkShaderErrors(unsigned int s, const std::string& t);
 void checkProgramErrors(unsigned int p);
+bool deleteSelectedWorld();
 bool isWorldButtonEnabled(int buttonIndex);
 void updateMainMenuOptions(GLFWwindow* window);
 void renderMainMenuOptions(int screenW, int screenH);
@@ -843,7 +844,7 @@ void initWorldNoise() {
     mountainNoise.SetSeed(seed + 1);
 
     riverNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    riverNoise.SetFrequency(0.01f);
+    riverNoise.SetFrequency(0.0075f);
     riverNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     riverNoise.SetFractalOctaves(2);
     riverNoise.SetSeed(seed + 2);
@@ -1255,9 +1256,10 @@ float getHeightAt(int wx, int wz, float& outBiomeA, float& outBiomeB, float& out
     }
 
     float river = std::abs(riverNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)));
-    float riverMask = 1.0f - glm::smoothstep(0.030f, 0.090f, river);
+    float riverMask = 1.0f - glm::smoothstep(0.045f, 0.165f, river);
     if (riverMask > 0.0f) {
-        height = glm::mix(height, outWaterLevel - 2.0f, riverMask * 0.82f);
+        const float riverBed = outWaterLevel - 2.2f;
+        height = glm::mix(height, riverBed, riverMask * 0.68f);
     }
 
     const float minH = 4.0f;
@@ -1279,9 +1281,8 @@ enum BiomeId {
 
 int getBiome(float biomeA, float biomeB, float height, float waterLevel) {
     float depth = waterLevel - height;
-    float river = std::abs(riverNoise.GetNoise(biomeA * 1000.0f, biomeB * 1000.0f));
 
-    if (river > 0.49f && river < 0.54f && depth < 2.0f) return BIOME_RIVER;
+    if (depth > 0.2f && depth < 5.0f) return BIOME_RIVER;
     if (depth > 7.0f) return BIOME_DEEP_OCEAN;
     if (depth > 1.5f) return BIOME_OCEAN;
     if (std::abs(height - waterLevel) < 1.2f) return BIOME_BEACH;
@@ -1453,7 +1454,9 @@ std::shared_ptr<ChunkData> generateChunk(int cx, int cz) {
                         if (columns[nx][nz].height <= columns[nx][nz].waterLevel)
                             { hasWaterNeighbor = true; break; }
                 }
-            if (hasWaterNeighbor && landHeight > waterLevel && landHeight - waterLevel < 4.0f) {
+            if (hasWaterNeighbor && (col.biome == BIOME_BEACH || col.biome == BIOME_RIVER ||
+                                      col.biome == BIOME_OCEAN || col.biome == BIOME_DEEP_OCEAN) &&
+                landHeight > waterLevel && landHeight - waterLevel < 4.0f) {
                 int idx = (x * CHUNK_SIZE_Y + surfaceY) * CHUNK_SIZE_Z + z;
                 if (data->blocks[idx] == 1 || data->blocks[idx] == 2) data->blocks[idx] = 4;
             }
@@ -1677,6 +1680,7 @@ int currentHotbarSlot = 0;
 int inventoryScrollRow = 0;
 constexpr int MAIN_MENU_BUTTON_COUNT = 6;
 constexpr int WORLD_SELECT_BUTTON_COUNT = 6;
+constexpr int DELETE_CONFIRM_BUTTON_COUNT = 2;
 constexpr int LANGUAGE_BUTTON_COUNT = 1;
 constexpr int OPTIONS_ROW1_BUTTON_COUNT = 4;
 constexpr int OPTIONS_ROW2_BUTTON_COUNT = 5;
@@ -1721,6 +1725,33 @@ MenuListState languageListState;
 
 void updateUILabels();
 void refreshWorldMenuEntries();
+bool deleteSelectedWorld() {
+    if (worldListState.selectedIndex < 0 ||
+        worldListState.selectedIndex >= static_cast<int>(availableWorlds.size())) {
+        return false;
+    }
+
+    const std::string folderName = availableWorlds[worldListState.selectedIndex].folderName;
+    fs::path worldPath = getWorldPath(folderName);
+    if (worldPath.empty() || !fs::exists(worldPath)) return false;
+
+    std::error_code ec;
+    fs::remove_all(worldPath, ec);
+    if (ec) return false;
+
+    if (currentWorldFolderName == folderName) {
+        currentWorldFolderName.clear();
+        currentWorldDisplayName.clear();
+        currentWorldSeed = 0;
+    }
+    if (selectedWorldFolderName == folderName) {
+        selectedWorldFolderName.clear();
+    }
+
+    refreshWorldMenuEntries();
+    return true;
+}
+
 void refreshLanguageMenuEntries();
 void applyLanguageSelection(int index);
 
@@ -1753,6 +1784,10 @@ Button worldButtons[WORLD_SELECT_BUTTON_COUNT] = {
 };
 Button pauseResumeButton = {0.5f, 0.45f, 0.4f, 0.08f, 0,0,0,0, false, "Resume"};
 Button pauseExitButton   = {0.5f, 0.55f, 0.4f, 0.08f, 0,0,0,0, false, "Exit to Menu"};
+Button deleteConfirmButtons[DELETE_CONFIRM_BUTTON_COUNT] = {
+    {0.39f, 0.62f, 0.2025f, 0.0486f, 0,0,0,0, false, "yes"},
+    {0.61f, 0.62f, 0.2025f, 0.0486f, 0,0,0,0, false, "no"}
+};
 
 float photoRelX = 0.5f, photoRelY = 0.23f, photoRelW = 0.46f, photoRelH = 0.18f;
 float photoAbsX, photoAbsY, photoAbsW, photoAbsH;
@@ -4389,7 +4424,8 @@ enum class GameState {
     IN_GAME,
     MAIN_MENU_OPTIONS,
     PAUSE_MENU,
-    CREATIVE_INVENTORY
+    CREATIVE_INVENTORY,
+    DELETE_WORLD_CONFIRM_MENU
 };
 
 
@@ -5088,6 +5124,9 @@ void renderMainMenuOptions(int screenW, int screenH) {
     glEnable(GL_CULL_FACE);
 }
 
+void renderDeleteWorldConfirmMenu(int screenW, int screenH);
+void handleDeleteWorldConfirmMenuClick(GLFWwindow* window, int button);
+
 void renderWorldSelectMenu(int screenW, int screenH) {
     glClearColor(0,0,0,1);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -5172,6 +5211,68 @@ void renderWorldSelectMenu(int screenW, int screenH) {
     glEnable(GL_CULL_FACE);
 }
 
+void renderDeleteWorldConfirmMenu(int screenW, int screenH) {
+    glClearColor(0,0,0,1);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    const unsigned int backgroundTexture = menuBackgroundDarkTexture != 0 ? menuBackgroundDarkTexture : menuBackgroundTexture;
+    if (backgroundTexture) {
+        drawTiledBackground(backgroundTexture, screenW, screenH);
+    }
+
+    const char* question = "вы точно хотите удалить мир навсегда? (Очень-очень долго)";
+    drawMinecraftTextCentered(question, screenW * 0.5f, screenH * 0.30f, 2.0f, screenW, screenH,
+                              glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+
+    for (int i = 0; i < DELETE_CONFIRM_BUTTON_COUNT; ++i) {
+        deleteConfirmButtons[i].absW = deleteConfirmButtons[i].relW * screenW;
+        deleteConfirmButtons[i].absH = deleteConfirmButtons[i].relH * screenH;
+        deleteConfirmButtons[i].absX = deleteConfirmButtons[i].relX * screenW - deleteConfirmButtons[i].absW / 2.0f;
+        deleteConfirmButtons[i].absY = deleteConfirmButtons[i].relY * screenH - deleteConfirmButtons[i].absH / 2.0f;
+
+        const bool hovered = isMouseOverButton(deleteConfirmButtons[i], mouseX, mouseY);
+        unsigned int tex = (hovered && menuButtonHighlightTexture) ? menuButtonHighlightTexture : menuButtonTexture;
+        drawRectangle(deleteConfirmButtons[i].absX, deleteConfirmButtons[i].absY,
+                      deleteConfirmButtons[i].absW, deleteConfirmButtons[i].absH, tex, screenW, screenH);
+        drawMinecraftTextCentered(deleteConfirmButtons[i].label,
+                                  deleteConfirmButtons[i].absX + deleteConfirmButtons[i].absW * 0.5f,
+                                  deleteConfirmButtons[i].absY + deleteConfirmButtons[i].absH * 0.52f,
+                                  fitMinecraftButtonTextScale(deleteConfirmButtons[i].label,
+                                                              deleteConfirmButtons[i].absW,
+                                                              deleteConfirmButtons[i].absH),
+                                  screenW, screenH, getMenuTextColor(hovered));
+    }
+
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+}
+
+void handleDeleteWorldConfirmMenuClick(GLFWwindow* window, int button) {
+    if (button != GLFW_MOUSE_BUTTON_LEFT) return;
+
+    double mx, my;
+    glfwGetCursorPos(window, &mx, &my);
+    for (int i = 0; i < DELETE_CONFIRM_BUTTON_COUNT; ++i) {
+        if (mx < deleteConfirmButtons[i].absX || mx > deleteConfirmButtons[i].absX + deleteConfirmButtons[i].absW ||
+            my < deleteConfirmButtons[i].absY || my > deleteConfirmButtons[i].absY + deleteConfirmButtons[i].absH) {
+            continue;
+        }
+
+        deleteConfirmButtons[i].clicked = true;
+        soundManager.playUISound("ui");
+        if (i == 0) {
+            deleteSelectedWorld();
+        }
+        currentState = GameState::WORLD_SELECT_MENU;
+        deleteConfirmButtons[i].clicked = false;
+        break;
+    }
+}
 void renderLanguageMenu(int screenW, int screenH) {
     glClearColor(0,0,0,1);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -5361,6 +5462,8 @@ void handleWorldSelectMenuClick(GLFWwindow* window, int button) {
             if (worldListState.selectedIndex >= 0 && worldListState.selectedIndex < static_cast<int>(availableWorlds.size())) {
                 loadGame();
             }
+        } else if (i == 2) {
+            currentState = GameState::DELETE_WORLD_CONFIRM_MENU;
         } else if (i == 3) {
             startNewGame();
         } else if (i == 5) {
@@ -6724,6 +6827,9 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
     } else if (currentState == GameState::WORLD_SELECT_MENU) {
         if (action != GLFW_PRESS) return;
         handleWorldSelectMenuClick(window, button);
+    } else if (currentState == GameState::DELETE_WORLD_CONFIRM_MENU) {
+        if (action != GLFW_PRESS) return;
+        handleDeleteWorldConfirmMenuClick(window, button);
     }else if (currentState == GameState::MAIN_MENU_OPTIONS) {
         if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
             double mx, my;
@@ -7069,6 +7175,9 @@ int main() {
                 break;
             case GameState::LANGUAGE_MENU:
                 renderLanguageMenu(screenW, screenH);
+                break;
+            case GameState::DELETE_WORLD_CONFIRM_MENU:
+                renderDeleteWorldConfirmMenu(screenW, screenH);
                 break;
             case GameState::LOADING_GAME:
             case GameState::IN_GAME:

@@ -168,6 +168,8 @@ bool isPlayerInWater();
 void scanAmbientSounds();
 void playRandomAmbientSound();
 void renderSingleBlockModel(int blockType);
+int getBlockAtPoint(const glm::vec3& point);
+int getBlockUnderCamera(const glm::vec3& cameraPosition, const glm::vec3& feetPosition);
 void renderItemIconFlat(int itemId, int screenX, int screenY, int size, int screenW, int screenH);
 void initCloudLayer();
 void initCelestialBodies();
@@ -4026,6 +4028,22 @@ int getBlockAt(int wx, int wy, int wz) {
     int lx = wx - cx*CHUNK_SIZE_X, lz = wz - cz*CHUNK_SIZE_Z;
     return it->second.getLocalBlock(lx,wy,lz);
 }
+
+int getBlockAtPoint(const glm::vec3& point) {
+    // Blocks are centered on integer coordinates and occupy
+    // [coord - 0.5; coord + 0.5]. floor(worldCoord) can therefore select
+    // a neighboring wall block when the player is pressed against a side.
+    return getBlockAt(
+        static_cast<int>(std::floor(point.x + 0.5f)),
+        static_cast<int>(std::floor(point.y + 0.5f)),
+        static_cast<int>(std::floor(point.z + 0.5f))
+    );
+}
+
+int getBlockUnderCamera(const glm::vec3& cameraPosition, const glm::vec3& feetPosition) {
+    glm::vec3 samplePoint(cameraPosition.x, feetPosition.y - 0.1f, cameraPosition.z);
+    return getBlockAtPoint(samplePoint);
+}
 void setBlockAt(int wx, int wy, int wz, int type) {
     if (wy<0||wy>=CHUNK_SIZE_Y) return;
     int cx = (wx>=0) ? wx/CHUNK_SIZE_X : (wx-CHUNK_SIZE_X+1)/CHUNK_SIZE_X;
@@ -4387,6 +4405,7 @@ double mouseX=0, mouseY=0;
 int currentScreenW=SCR_WIDTH, currentScreenH=SCR_HEIGHT;
 float stepSoundTimer = 0.0f;
 const float STEP_SOUND_INTERVAL = 0.4f;
+const float STEP_GROUND_GRACE_TIME = 0.12f;
 
 // Forward declarations функций состояний
 void updateMainMenu(GLFWwindow* window);
@@ -5658,26 +5677,36 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     // =========================================================
     // ЗВУКИ ШАГОВ
     // =========================================================
-    static bool wasMoving = false;
-    
-    if (isOnGround && moving && !inWater) {
-        if (!wasMoving) {
+    static bool wasStepSoundActive = false;
+    static float stepGroundGraceTimer = 0.0f;
+
+    if (isOnGround) {
+        stepGroundGraceTimer = STEP_GROUND_GRACE_TIME;
+    } else {
+        stepGroundGraceTimer = std::max(0.0f, stepGroundGraceTimer - deltaTime);
+    }
+
+    bool hasHorizontalStepMovement = glm::length(glm::vec2(actualDelta.x, actualDelta.z)) > 0.0001f;
+    bool canPlayStepSound = (isOnGround || stepGroundGraceTimer > 0.0f) && moving && hasHorizontalStepMovement && !inWater;
+
+    if (canPlayStepSound) {
+        if (!wasStepSoundActive) {
             stepSoundTimer = STEP_SOUND_INTERVAL;
         }
-        
+
         stepSoundTimer += deltaTime;
         if (stepSoundTimer >= STEP_SOUND_INTERVAL) {
             stepSoundTimer -= STEP_SOUND_INTERVAL;
-            int blockBelow = getBlockAt(floor(cameraPos.x), floor(feetPos.y - 0.1f), floor(cameraPos.z));
+            int blockBelow = getBlockUnderCamera(cameraPos, feetPos);
             if (blockBelow != 0 && blockBelow != 5) {
                 soundManager.play(blockBelow, "step", gameStarted);
             }
         }
-    } else {
+    } else if (!moving || inWater) {
         stepSoundTimer = 0.0f;
     }
-    
-    wasMoving = moving;
+
+    wasStepSoundActive = canPlayStepSound;
     
     // Звуки входа/выхода из воды
     static bool wasInWaterSound = false;

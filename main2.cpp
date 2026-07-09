@@ -408,7 +408,8 @@ struct BlockType {
 std::unordered_map<int, BlockType> blockTypes;
 
 // Alpha-блоки, заданные прямо в коде, имеют приоритет над blocks.json.
-// Такие блоки пропускают свет и рисуют грань даже рядом с таким же блоком (подходит для листвы).
+// Такие блоки пропускают свет и могут рисовать грани рядом с таким же блоком.
+// Грани рядом с непрозрачными блоками скрываются, чтобы листва не мерцала внутри стволов/земли.
 // Если id не указан здесь, transparent берётся из blocks.json и ведёт себя как стекло:
 // свет проходит, но внутренние грани между одинаковыми alpha-блоками скрываются.
 const std::unordered_set<int> codeAlphaBlocks = {
@@ -3825,7 +3826,7 @@ struct Chunk {
                     
                     pushVertex(out, i, uOff + u * uScale, v, faceTint, 0.0f);
                     if (isGrassSide && grassSideOverlayTexture != 0) {
-                        pushVertex(grassOverlayVertices, i, u, v, biomeColor, 0.002f);
+                        pushVertex(grassOverlayVertices, i, u, v, biomeColor, 0.006f);
                     }
                 }
             };
@@ -3839,6 +3840,9 @@ struct Chunk {
                 bool currentAlpha = isAlphaBlock(type);
                 bool neighborAlpha = isAlphaBlock(neighbor);
                 if (currentAlpha) {
+                    // Листва/alpha рядом с непрозрачным блоком не должна рисовать спрятанную
+                    // внутреннюю сторону: это убирает лишнюю геометрию и мерцание на контактах.
+                    if (isOpaque(neighbor) && !neighborAlpha) return false;
                     // Одинаковые alpha-блоки используют свой режим: листва рисует внутренние грани,
                     // стекло скрывает их. Разные alpha-блоки (например листва рядом со стеклом)
                     // должны видеть грани друг друга, иначе часть текстуры пропадает.
@@ -4022,7 +4026,8 @@ void setSkyLightAt(int wx, int wy, int wz, uint8_t value) {
         int lx = wx - cx * CHUNK_SIZE_X;
         int lz = wz - cz * CHUNK_SIZE_Z;
         it->second.setLocalSkyLight(lx, wy, lz, value);
-        it->second.meshReady = false; // освещение изменилось
+        // Не скрываем весь чанк на кадр при пересчёте света: ближайшие меши
+        // перестраиваются явно после изменения блока.
     }
 }
 void setBlockLightAt(int wx, int wy, int wz, uint8_t value) {
@@ -4034,7 +4039,8 @@ void setBlockLightAt(int wx, int wy, int wz, uint8_t value) {
         int lx = wx - cx * CHUNK_SIZE_X;
         int lz = wz - cz * CHUNK_SIZE_Z;
         it->second.setLocalBlockLight(lx, wy, lz, value);
-        it->second.meshReady = false;
+        // Не сбрасываем meshReady здесь, иначе при установке/ломании блока
+        // на время пропадают целые чанки, затронутые областью освещения.
     }
 }
 
@@ -5219,7 +5225,7 @@ void renderDeleteWorldConfirmMenu(int screenW, int screenH) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    const unsigned int backgroundTexture = menuBackgroundDarkTexture != 0 ? menuBackgroundDarkTexture : menuBackgroundTexture;
+    const unsigned int backgroundTexture = menuBackgroundLightTexture != 0 ? menuBackgroundLightTexture : menuBackgroundTexture;
     if (backgroundTexture) {
         drawTiledBackground(backgroundTexture, screenW, screenH);
     }

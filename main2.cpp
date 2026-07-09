@@ -3839,7 +3839,7 @@ struct Chunk {
                     
                     pushVertex(out, i, uOff + u * uScale, v, faceTint, 0.0f);
                     if (isGrassSide && grassSideOverlayTexture != 0) {
-                        pushVertex(grassOverlayVertices, i, u, v, biomeColor, 0.002f);
+                        pushVertex(grassOverlayVertices, i, u, v, biomeColor, 0.006f);
                     }
                 }
             };
@@ -4169,6 +4169,9 @@ void integratePendingChunkData(int maxPerFrame) {
             it = pendingData.erase(it);
         }
     }
+
+    std::vector<glm::ivec2> integratedChunks;
+    integratedChunks.reserve(readyChunks.size());
 
     for (auto& [chunkPos, chunkData] : readyChunks) {
         auto loadedIt = loadedChunks.find(chunkPos);

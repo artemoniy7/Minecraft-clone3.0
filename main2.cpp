@@ -84,7 +84,7 @@ unsigned int underwaterOverlayTexture = 0;
 // ----------------------------------------------------------------------
 const int CHUNK_SIZE_X = 16;
 const int CHUNK_SIZE_Z = 16;
-const int CHUNK_SIZE_Y = 128;
+const int CHUNK_SIZE_Y = 256;
 const int CHUNK_VOLUME = CHUNK_SIZE_X * CHUNK_SIZE_Y * CHUNK_SIZE_Z;
 
 // ----------------------------------------------------------------------
@@ -835,10 +835,10 @@ void initWorldNoise() {
     int seed = currentWorldSeed;
 
     mountainNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    mountainNoise.SetFrequency(0.008f);
+    mountainNoise.SetFrequency(0.0035f);
     mountainNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    mountainNoise.SetFractalOctaves(4);
-    mountainNoise.SetFractalGain(0.50f);
+    mountainNoise.SetFractalOctaves(3);
+    mountainNoise.SetFractalGain(0.42f);
     mountainNoise.SetFractalLacunarity(2.0f);
     mountainNoise.SetSeed(seed + 1);
 
@@ -861,9 +861,9 @@ void initWorldNoise() {
     biomeNoiseB.SetSeed(seed + 4);
 
     detailNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    detailNoise.SetFrequency(0.03f);
+    detailNoise.SetFrequency(0.018f);
     detailNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
-    detailNoise.SetFractalOctaves(3);
+    detailNoise.SetFractalOctaves(2);
     detailNoise.SetSeed(seed + 5);
 
     treeNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
@@ -879,7 +879,7 @@ void initWorldNoise() {
     seaLevelNoise.SetSeed(seed + 7);
 
     transitionNoise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
-    transitionNoise.SetFrequency(0.02f);
+    transitionNoise.SetFrequency(0.0065f);
     transitionNoise.SetFractalType(FastNoiseLite::FractalType_FBm);
     transitionNoise.SetFractalOctaves(2);
     transitionNoise.SetSeed(seed + 8);
@@ -1233,35 +1233,35 @@ float getHeightAt(int wx, int wz, float& outBiomeA, float& outBiomeB, float& out
 
     constexpr float BASE_SEA_LEVEL = 62.0f;
     float seaNoise = seaLevelNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
-    outWaterLevel = glm::clamp(BASE_SEA_LEVEL + seaNoise * 1.2f, 60.0f, 64.0f);
+    outWaterLevel = glm::clamp(BASE_SEA_LEVEL + seaNoise * 0.8f, 61.0f, 63.0f);
 
-    float noise1 = mountainNoise.GetNoise(static_cast<float>(wx) * 0.7f, static_cast<float>(wz) * 0.7f);
-    float noise2 = mountainNoise.GetNoise(static_cast<float>(wx) * 1.4f + 131.0f, static_cast<float>(wz) * 1.4f - 77.0f);
-    float noise3 = detailNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
-    float mountain = (mountainNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) + 1.0f) * 0.5f;
+    float continent = mountainNoise.GetNoise(static_cast<float>(wx) * 0.45f, static_cast<float>(wz) * 0.45f);
+    float broadHills = transitionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
+    float rollingDetail = detailNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz));
 
-    float base = noise1 * 28.0f + noise2 * 12.0f + noise3 * 5.0f;
-    float hills = 0.0f;
-    if (mountain > 0.45f) {
-        hills = mountain * mountain * 40.0f;
+    // Minecraft 1.7.x-like terrain: broad rolling land first, rare mountains second.
+    // Avoid high-frequency spikes so columns stay continuous and do not create
+    // unnatural gaps between terrain layers.
+    float height = 64.0f;
+    height += continent * 14.0f;
+    height += broadHills * 10.0f;
+    height += rollingDetail * 2.25f;
+
+    float mountainMask = glm::smoothstep(0.58f, 0.86f, continent);
+    if (mountainMask > 0.0f) {
+        float ridge = glm::max(0.0f, mountainNoise.GetNoise(static_cast<float>(wx) * 0.9f + 211.0f,
+                                                            static_cast<float>(wz) * 0.9f - 97.0f));
+        height += mountainMask * (18.0f + ridge * 20.0f);
     }
-
-    float detail = transitionNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)) * 3.0f;
-    float spikeSelector = detailNoise.GetNoise(static_cast<float>(wx) * 2.5f, static_cast<float>(wz) * 2.5f);
-    if (spikeSelector > 0.60f) {
-        float spikeNoise = transitionNoise.GetNoise(static_cast<float>(wx) * 4.2f + 19.0f, static_cast<float>(wz) * 4.2f - 43.0f);
-        detail += spikeNoise * 6.0f;
-    }
-
-    float height = 64.0f + base + hills + detail;
 
     float river = std::abs(riverNoise.GetNoise(static_cast<float>(wx), static_cast<float>(wz)));
-    if (river > 0.48f && river < 0.54f) {
-        height -= 3.0f;
+    float riverMask = 1.0f - glm::smoothstep(0.030f, 0.090f, river);
+    if (riverMask > 0.0f) {
+        height = glm::mix(height, outWaterLevel - 2.0f, riverMask * 0.82f);
     }
 
-    const float minH = 3.0f;
-    const float maxH = CHUNK_SIZE_Y - 9.0f;
+    const float minH = 4.0f;
+    const float maxH = CHUNK_SIZE_Y - 16.0f;
     return glm::clamp(height, minH, maxH);
 }
 
@@ -1286,8 +1286,8 @@ int getBiome(float biomeA, float biomeB, float height, float waterLevel) {
     if (depth > 1.5f) return BIOME_OCEAN;
     if (std::abs(height - waterLevel) < 1.2f) return BIOME_BEACH;
 
-    if (height > waterLevel + 37.0f) return BIOME_STONY_PEAKS;
-    if (height > waterLevel + 25.0f) return BIOME_MOUNTAINS;
+    if (height > waterLevel + 58.0f) return BIOME_STONY_PEAKS;
+    if (height > waterLevel + 34.0f) return BIOME_MOUNTAINS;
     if (biomeA > 0.5f) return BIOME_FOREST;
     if (biomeB < -0.3f) return BIOME_DESERT;
     return BIOME_PLAINS;
@@ -6105,7 +6105,14 @@ void initCloudLayer() {
          halfSize, y,  halfSize,   uvScale,  uvScale, 0.0f, -1.0f, 0.0f, 0.92f, 0.0f,
          halfSize, y,  halfSize,   uvScale,  uvScale, 0.0f, -1.0f, 0.0f, 0.92f, 0.0f,
         -halfSize, y,  halfSize,   0.0f,     uvScale, 0.0f, -1.0f, 0.0f, 0.92f, 0.0f,
-        -halfSize, y, -halfSize,   0.0f,     0.0f,    0.0f, -1.0f, 0.0f, 0.92f, 0.0f
+        -halfSize, y, -halfSize,   0.0f,     0.0f,    0.0f, -1.0f, 0.0f, 0.92f, 0.0f,
+
+        -halfSize, y, -halfSize,   0.0f,     0.0f,    0.0f,  1.0f, 0.0f, 0.92f, 0.0f,
+        -halfSize, y,  halfSize,   0.0f,     uvScale, 0.0f,  1.0f, 0.0f, 0.92f, 0.0f,
+         halfSize, y,  halfSize,   uvScale,  uvScale, 0.0f,  1.0f, 0.0f, 0.92f, 0.0f,
+         halfSize, y,  halfSize,   uvScale,  uvScale, 0.0f,  1.0f, 0.0f, 0.92f, 0.0f,
+         halfSize, y, -halfSize,   uvScale,  0.0f,    0.0f,  1.0f, 0.0f, 0.92f, 0.0f,
+        -halfSize, y, -halfSize,   0.0f,     0.0f,    0.0f,  1.0f, 0.0f, 0.92f, 0.0f
     };
 
     glGenVertexArrays(1, &cloudVAO);
@@ -6430,7 +6437,7 @@ void renderCloudLayer(float currentTime) {
     glBindVertexArray(cloudVAO);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glDrawArrays(GL_TRIANGLES, 0, 12);
     glDisable(GL_BLEND);
     glBindVertexArray(0);
     glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, glm::value_ptr(glm::mat4(1.0f)));

@@ -6100,8 +6100,11 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.0f, -1.0f);
     for (auto& p : loadedChunks)
         p.second.renderGrassOverlay();
+    glDisable(GL_POLYGON_OFFSET_FILL);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
 

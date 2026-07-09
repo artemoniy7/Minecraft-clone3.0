@@ -1157,6 +1157,17 @@ void onBlockChangedGlobal(int x, int y, int z) {
     rebuildBlockLightRegion(region);
 }
 
+void rebuildBlockLightAroundChunk(int cx, int cz) {
+    LightRegion region;
+    region.minX = cx * CHUNK_SIZE_X - maxBlockLightRadius;
+    region.maxX = (cx + 1) * CHUNK_SIZE_X - 1 + maxBlockLightRadius;
+    region.minY = 0;
+    region.maxY = CHUNK_SIZE_Y - 1;
+    region.minZ = cz * CHUNK_SIZE_Z - maxBlockLightRadius;
+    region.maxZ = (cz + 1) * CHUNK_SIZE_Z - 1 + maxBlockLightRadius;
+    rebuildBlockLightRegion(region);
+}
+
 // Небесный свет: BFS после вертикального прохода (для генерации чанков)
 void floodSkyLight(std::queue<LightNode>& queue) {
     while (!queue.empty()) {
@@ -4116,6 +4127,9 @@ void integratePendingChunkData(int maxPerFrame) {
         }
     }
 
+    std::vector<glm::ivec2> integratedChunks;
+    integratedChunks.reserve(readyChunks.size());
+
     for (auto& [chunkPos, chunkData] : readyChunks) {
         auto loadedIt = loadedChunks.find(chunkPos);
         if (loadedIt == loadedChunks.end()) continue;
@@ -4124,6 +4138,11 @@ void integratePendingChunkData(int maxPerFrame) {
         loadedIt->second.meshReady = false;
         loadedIt->second.dirty = false;
         loadedIt->second.invalidateNeighbors();
+        integratedChunks.push_back(chunkPos);
+    }
+
+    for (const glm::ivec2& chunkPos : integratedChunks) {
+        rebuildBlockLightAroundChunk(chunkPos.x, chunkPos.y);
     }
 }
 

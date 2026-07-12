@@ -154,6 +154,8 @@ void integratePendingChunkData(int maxPerFrame);
 void buildChunkMeshesNearCamera(int maxPerFrame);
 void rebuildChunkMeshesImmediatelyAround(int cx, int cz, int lx, int lz);
 void processPendingLightMeshRebuilds(int maxPerFrame);
+void scheduleSkyLightColumnsAroundAsync(int x, int z);
+void processPendingSkyLightColumnUpdates(int maxColumnsPerFrame);
 void initReticle();
 void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb, glm::vec3& sky);
 void checkShaderErrors(unsigned int s, const std::string& t);
@@ -1632,10 +1634,55 @@ static std::queue<glm::ivec2> pendingBlockLightRebuildChunks;
 static std::unordered_set<glm::ivec2, hash_ivec2> queuedBlockLightRebuildChunks;
 static std::queue<glm::ivec2> pendingLightMeshRebuildChunks;
 static std::unordered_set<glm::ivec2, hash_ivec2> queuedLightMeshRebuildChunks;
+static std::queue<glm::ivec2> pendingSkyLightColumnUpdates;
+static std::unordered_set<glm::ivec2, hash_ivec2> queuedSkyLightColumnUpdates;
 static Chunk* lastChunkForMesh = nullptr;
 static glm::ivec2 lastChunkCoordsForMesh(0,0);
 
 static GLint u_modelLoc = -1, u_viewLoc = -1, u_projLoc = -1;
+
+void scheduleSkyLightColumnAsync(int x, int z) {
+    glm::ivec2 column(x, z);
+    if (queuedSkyLightColumnUpdates.insert(column).second) {
+        pendingSkyLightColumnUpdates.push(column);
+    }
+}
+
+void scheduleSkyLightColumnsAroundAsync(int x, int z) {
+    const int offsets[5][2] = {
+        {0, 0},
+        {1, 0},
+        {-1, 0},
+        {0, 1},
+        {0, -1}
+    };
+
+    for (int i = 0; i < 5; ++i) {
+        scheduleSkyLightColumnAsync(x + offsets[i][0], z + offsets[i][1]);
+    }
+}
+
+void processPendingSkyLightColumnUpdates(int maxColumnsPerFrame) {
+    auto floorDiv = [](int value, int divisor) {
+        return (value >= 0) ? value / divisor : (value - divisor + 1) / divisor;
+    };
+
+    int processed = 0;
+    while (processed < maxColumnsPerFrame && !pendingSkyLightColumnUpdates.empty()) {
+        glm::ivec2 column = pendingSkyLightColumnUpdates.front();
+        pendingSkyLightColumnUpdates.pop();
+        queuedSkyLightColumnUpdates.erase(column);
+
+        rebuildSkyLightColumnBase(column.x, column.y);
+        smoothSkyLightColumn(column.x, column.y);
+
+        glm::ivec2 chunkPos(floorDiv(column.x, CHUNK_SIZE_X), floorDiv(column.y, CHUNK_SIZE_Z));
+        if (queuedLightMeshRebuildChunks.insert(chunkPos).second) {
+            pendingLightMeshRebuildChunks.push(chunkPos);
+        }
+        ++processed;
+    }
+}
 
 constexpr float DAY_DURATION_SECONDS = 60.0f;
 constexpr float NIGHT_DURATION_SECONDS = 60.0f;
@@ -3547,8 +3594,10 @@ struct Chunk {
         int idx = (x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z;
         int oldId = data->blocks[idx];
         data->blocks[idx] = id;
-        meshReady = false; dirty = true;
-        // Глобальное обновление света будет вызвано из setBlockAt
+        dirty = true;
+        // Не сбрасываем meshReady сразу: старый меш остаётся на экране,
+        // а новая геометрия планируется в очередь и пересобирается по бюджету кадра.
+        // Это убирает фриз и исчезновение чанка при обычной установке/ломании блока.
     }
 
     bool isAOSolid(int wx, int wy, int wz) const {
@@ -4384,24 +4433,29 @@ void setBlockAt(int wx, int wy, int wz, int type) {
     if (!blockLightRelevant && oldOpacity != newOpacity) {
         blockLightRelevant = getBlockLightAt(wx, wy + 1, wz) > 0;
     }
-    if (lx==0) { auto n=loadedChunks.find({cx-1,cz}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
-    if (lx==CHUNK_SIZE_X-1) { auto n=loadedChunks.find({cx+1,cz}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
-    if (lz==0) { auto n=loadedChunks.find({cx,cz-1}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
-    if (lz==CHUNK_SIZE_Z-1) { auto n=loadedChunks.find({cx,cz+1}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
+    // Соседние чанки больше не инвалидируются синхронно: если блок стоит на границе,
+    // rebuildChunkMeshesImmediatelyAround ниже поставит нужные чанки в очередь.
     waterChunksCacheValid = false;
 
     const bool lightEmitterChanged = oldEmission != newEmission;
     if (lightEmitterChanged) {
         updateBlockLightIncremental(wx, wy, wz, oldEmission, newEmission);
         if (oldOpacity != newOpacity) {
-            updateSkyLightColumnsAround(wx, wz);
+            scheduleSkyLightColumnsAroundAsync(wx, wz);
         }
     }
 
-    // Глобальное обновление света планирует фоновую пересборку чанков со сменившимся светом.
-    // Для светящихся блоков используем быстрый инкрементальный путь, чтобы установка/ломание
-    // не запускали полный пересчёт региона и не подвешивали игру.
-    onBlockChangedGlobal(wx, wy, wz, skyLightRelevant && !lightEmitterChanged, blockLightRelevant && !lightEmitterChanged);
+    // Не запускаем полный rebuildSkyLightRegion из пути клика: он обходит большую область
+    // по всей высоте мира и именно на обычных блоках даёт заметный фриз. Для смены
+    // непрозрачности достаточно дешёвого вертикального обновления ближайших колонок.
+    if (!lightEmitterChanged && skyLightRelevant) {
+        scheduleSkyLightColumnsAroundAsync(wx, wz);
+    }
+
+    // Полную перестройку блочного света оставляем только когда рядом реально был
+    // распространяющийся блочный свет. В обычном случае это false, поэтому постановка
+    // камня/земли/досок больше не запускает тяжёлый пересчёт освещения региона.
+    onBlockChangedGlobal(wx, wy, wz, false, blockLightRelevant && !lightEmitterChanged);
     rebuildChunkMeshesImmediatelyAround(cx, cz, lx, lz);
 }
 
@@ -4444,7 +4498,8 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
     const int integrateBudget = fastChunkLoadingMode ? 24 : 2;
     integratePendingChunkData(integrateBudget);
     processPendingBlockLightRebuilds(fastChunkLoadingMode ? 2 : 1);
-    processPendingLightMeshRebuilds(fastChunkLoadingMode ? 6 : 1);
+    processPendingSkyLightColumnUpdates(fastChunkLoadingMode ? 24 : 2);
+    processPendingLightMeshRebuilds(fastChunkLoadingMode ? 6 : 8);
 
     if (!loadedChunks.empty() && lastRequestedCenter.x == centerCX && lastRequestedCenter.y == centerCZ) {
         return;
@@ -4520,9 +4575,16 @@ void rebuildChunkMeshesImmediatelyAround(int cx, int cz, int lx, int lz) {
 
     for (int i = 0; i < rebuildCount; ++i) {
         auto it = loadedChunks.find(rebuildList[i]);
-        if (it == loadedChunks.end()) continue;
-        if (!it->second.data) continue;
-        it->second.buildMesh();
+        if (it == loadedChunks.end() || !it->second.data) continue;
+
+        // Исторически эта функция пересобирала меш прямо из mouse_callback.
+        // buildMesh() делает CPU-проход по чанку и GL-загрузку буферов, поэтому
+        // быстрые клики по блокам давали заметные просадки. Теперь только ставим
+        // чанк в уже существующую очередь; processPendingLightMeshRebuilds заберёт
+        // небольшое число задач за кадр, сохраняя отзывчивость ввода.
+        if (queuedLightMeshRebuildChunks.insert(rebuildList[i]).second) {
+            pendingLightMeshRebuildChunks.push(rebuildList[i]);
+        }
     }
 }
 
@@ -5183,6 +5245,8 @@ void exitToMenu(GLFWwindow* window, int& sw, int& sh) {
     waterChunksCacheValid = false;
     pendingLightMeshRebuildChunks = std::queue<glm::ivec2>();
     queuedLightMeshRebuildChunks.clear();
+    pendingSkyLightColumnUpdates = std::queue<glm::ivec2>();
+    queuedSkyLightColumnUpdates.clear();
     {
         std::lock_guard<std::mutex> lock(chunkMutex);
         pendingData.clear();

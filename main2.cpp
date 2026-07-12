@@ -183,6 +183,7 @@ void initCloudLayer();
 void initCelestialBodies();
 void initStarField();
 void renderStars(float currentTime, const glm::vec3& sunDir, const glm::mat4& view, const glm::mat4& proj);
+void renderSkyHorizonGlow(const glm::vec3& sunDir, const glm::mat4& view, const glm::mat4& proj);
 void renderCelestialBodies(float currentTime, const glm::vec3& sunDir);
 
 void initPlayerRenderer();
@@ -1613,6 +1614,7 @@ unsigned int cloudTexture = 0, cloudVAO = 0, cloudVBO = 0;
 unsigned int rainTexture = 0, rainVAO = 0, rainVBO = 0;
 unsigned int sunTexture = 0, moonPhasesTexture = 0, celestialVAO = 0, celestialVBO = 0;
 unsigned int starProgram = 0, starVAO = 0, starVBO = 0;
+unsigned int skyGlowProgram = 0, skyGlowVAO = 0, skyGlowVBO = 0;
 int currentMoonPhase = 0;
 bool moonWasBelowWorld = false;
 bool isRaining = false;
@@ -6515,6 +6517,7 @@ void renderGame(int screenW, int screenH, float currentTime) {
     glUniform1f(u_sunIntensity_location, sunIntensity);
     glUniform1f(u_ambientBase_location, ambientBase);
     glUniform1i(u_isRain_location, 0);
+    renderSkyHorizonGlow(sunDir, view, proj);
     renderStars(currentTime, sunDir, view, proj);
     glUseProgram(shaderProgram);
     renderCelestialBodies(currentTime, sunDir);
@@ -6692,6 +6695,61 @@ void initCelestialBodies() {
 }
 
 
+const char* skyGlowVertexShaderSrc = R"(#version 330 core
+layout (location = 0) in vec3 aDirection;
+
+uniform mat4 view;
+uniform mat4 projection;
+uniform vec3 u_cameraPos;
+uniform float u_pointSize;
+
+void main() {
+    vec3 dir = normalize(aDirection);
+    vec3 worldPos = u_cameraPos + dir * 700.0;
+    gl_Position = projection * view * vec4(worldPos, 1.0);
+    gl_PointSize = u_pointSize;
+}
+)";
+
+const char* skyGlowFragmentShaderSrc = R"(#version 330 core
+uniform vec3 u_glowColor;
+uniform float u_alpha;
+
+out vec4 FragColor;
+
+void main() {
+    vec2 centered = gl_PointCoord - vec2(0.5);
+    float dist = length(centered);
+    if (dist > 0.5 || u_alpha <= 0.002) discard;
+
+    float core = 1.0 - smoothstep(0.00, 0.18, dist);
+    float halo = 1.0 - smoothstep(0.10, 0.50, dist);
+    float alpha = u_alpha * (core * 0.28 + halo * 0.72);
+    FragColor = vec4(u_glowColor, alpha);
+}
+)";
+
+void initSkyHorizonGlow() {
+    unsigned int vs = glCreateShader(GL_VERTEX_SHADER), fs = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(vs, 1, &skyGlowVertexShaderSrc, NULL); glCompileShader(vs); checkShaderErrors(vs, "sky glow vertex");
+    glShaderSource(fs, 1, &skyGlowFragmentShaderSrc, NULL); glCompileShader(fs); checkShaderErrors(fs, "sky glow fragment");
+    skyGlowProgram = glCreateProgram();
+    glAttachShader(skyGlowProgram, vs);
+    glAttachShader(skyGlowProgram, fs);
+    glLinkProgram(skyGlowProgram); checkProgramErrors(skyGlowProgram);
+    glDeleteShader(vs); glDeleteShader(fs);
+
+    glGenVertexArrays(1, &skyGlowVAO);
+    glGenBuffers(1, &skyGlowVBO);
+    glBindVertexArray(skyGlowVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, skyGlowVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3), nullptr, GL_DYNAMIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)0);
+    glEnableVertexAttribArray(0);
+    glBindVertexArray(0);
+}
+
+
 const char* starVertexShaderSrc = R"(#version 330 core
 layout (location = 0) in vec3 aDirection;
 layout (location = 1) in float aBrightness;
@@ -6856,6 +6914,62 @@ void renderStars(float currentTime, const glm::vec3& sunDir, const glm::mat4& vi
     glDrawArrays(GL_POINTS, 0, static_cast<GLsizei>(starPoints.size()));
     glBindVertexArray(0);
 
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    if (!blendEnabled) glDisable(GL_BLEND);
+    glDepthMask(previousDepthMask);
+    if (depthEnabled) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
+    if (cullEnabled) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
+}
+
+void renderSkyHorizonGlow(const glm::vec3& sunDir, const glm::mat4& view, const glm::mat4& proj) {
+    if (!skyGlowProgram || !skyGlowVAO || !skyGlowVBO) return;
+
+    glm::vec3 dir = sunDir;
+    if (!std::isfinite(dir.x) || !std::isfinite(dir.y) || !std::isfinite(dir.z) || glm::length(dir) < 0.001f) return;
+    dir = glm::normalize(dir);
+
+    const float horizonGlow = 1.0f - glm::smoothstep(0.035f, 0.34f, std::abs(dir.y));
+    if (horizonGlow <= 0.002f) return;
+
+    const float aboveHorizon = glm::smoothstep(-0.10f, 0.13f, dir.y);
+    const float twilight = (1.0f - glm::smoothstep(0.00f, 0.22f, std::abs(dir.y))) * (1.0f - aboveHorizon);
+    const glm::vec3 sunriseColor(0.98f, 0.54f, 0.30f);
+    const glm::vec3 sunsetColor(1.00f, 0.33f, 0.13f);
+    const glm::vec3 violetColor(0.28f, 0.16f, 0.38f);
+    glm::vec3 glowColor = glm::mix(sunsetColor, sunriseColor, glm::smoothstep(-0.25f, 0.25f, dir.x));
+    glowColor = glm::mix(glowColor, violetColor, twilight * 0.42f);
+
+    float alpha = horizonGlow * (0.40f + 0.42f * aboveHorizon);
+    if (isRaining) alpha *= 0.28f;
+
+    GLboolean depthEnabled = glIsEnabled(GL_DEPTH_TEST);
+    GLboolean cullEnabled = glIsEnabled(GL_CULL_FACE);
+    GLboolean blendEnabled = glIsEnabled(GL_BLEND);
+    GLboolean previousDepthMask = GL_TRUE;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+
+    if (depthEnabled) glDisable(GL_DEPTH_TEST);
+    if (cullEnabled) glDisable(GL_CULL_FACE);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glEnable(GL_PROGRAM_POINT_SIZE);
+
+    glUseProgram(skyGlowProgram);
+    glUniformMatrix4fv(glGetUniformLocation(skyGlowProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(glGetUniformLocation(skyGlowProgram, "projection"), 1, GL_FALSE, glm::value_ptr(proj));
+    glUniform3fv(glGetUniformLocation(skyGlowProgram, "u_cameraPos"), 1, glm::value_ptr(renderCameraPos));
+    glUniform3fv(glGetUniformLocation(skyGlowProgram, "u_glowColor"), 1, glm::value_ptr(glowColor));
+    glUniform1f(glGetUniformLocation(skyGlowProgram, "u_alpha"), alpha);
+    glUniform1f(glGetUniformLocation(skyGlowProgram, "u_pointSize"), 520.0f);
+
+    glBindVertexArray(skyGlowVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, skyGlowVBO);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(glm::vec3), glm::value_ptr(dir));
+    glDrawArrays(GL_POINTS, 0, 1);
+    glBindVertexArray(0);
+
+    glUseProgram(shaderProgram);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     if (!blendEnabled) glDisable(GL_BLEND);
     glDepthMask(previousDepthMask);
@@ -7472,24 +7586,15 @@ void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb
 
     const glm::vec3 nightSky(0.01f, 0.015f, 0.045f);
     const glm::vec3 daySky(0.53f, 0.81f, 0.92f);
-    const glm::vec3 sunriseSky(0.95f, 0.46f, 0.25f);
-    const glm::vec3 sunsetSky(0.98f, 0.34f, 0.14f);
-    const glm::vec3 twilightViolet(0.20f, 0.12f, 0.32f);
-
     sky = glm::mix(nightSky, daySky, daylight);
 
-    // Minecraft-like dawn/dusk: when the sun is close to the horizon the sky
-    // warms to orange/peach, then falls through a short violet twilight band.
+    // Keep the clear color mostly neutral. Dawn/dusk warmth is rendered later
+    // as a localized glow around the sun, so the moon side of the sky stays calm.
     float horizonGlow = 1.0f - glm::smoothstep(0.04f, 0.36f, std::abs(sunDir.y));
     float aboveHorizon = glm::smoothstep(-0.10f, 0.12f, sunDir.y);
-    float twilight = (1.0f - glm::smoothstep(0.00f, 0.28f, std::abs(sunDir.y))) * (1.0f - aboveHorizon);
-    glm::vec3 horizonColor = glm::mix(sunsetSky, sunriseSky, glm::smoothstep(-0.25f, 0.25f, sunDir.x));
-    sky = glm::mix(sky, horizonColor, horizonGlow * (0.45f + 0.35f * aboveHorizon));
-    sky = glm::mix(sky, twilightViolet, twilight * 0.45f);
-
-    float warmthBoost = horizonGlow * (0.35f + 0.30f * aboveHorizon);
-    sunInt = glm::clamp(sunInt + warmthBoost * 0.12f, 0.05f, 1.0f);
-    amb = glm::clamp(amb + warmthBoost * 0.05f, 0.02f, 0.40f);
+    float warmthBoost = horizonGlow * (0.25f + 0.20f * aboveHorizon);
+    sunInt = glm::clamp(sunInt + warmthBoost * 0.08f, 0.05f, 1.0f);
+    amb = glm::clamp(amb + warmthBoost * 0.025f, 0.02f, 0.40f);
 }
 void initReticle() {
     unsigned int vs = glCreateShader(GL_VERTEX_SHADER), fs = glCreateShader(GL_FRAGMENT_SHADER);
@@ -7555,6 +7660,7 @@ int main() {
     initFOVSlider(optionsSliders);
     initCloudLayer();
     initCelestialBodies();
+    initSkyHorizonGlow();
     initStarField();
     initPlayerRenderer();
     if (fs::exists("sounds/hurtflesh1.ogg")) {
@@ -7715,6 +7821,9 @@ int main() {
     if (rainTexture) glDeleteTextures(1, &rainTexture);
     if (sunTexture) glDeleteTextures(1, &sunTexture);
     if (moonPhasesTexture) glDeleteTextures(1, &moonPhasesTexture);
+    if (skyGlowVBO) glDeleteBuffers(1, &skyGlowVBO);
+    if (skyGlowVAO) glDeleteVertexArrays(1, &skyGlowVAO);
+    if (skyGlowProgram) glDeleteProgram(skyGlowProgram);
     if (starVBO) glDeleteBuffers(1, &starVBO);
     if (starVAO) glDeleteVertexArrays(1, &starVAO);
     if (starProgram) glDeleteProgram(starProgram);

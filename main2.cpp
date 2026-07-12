@@ -7469,7 +7469,27 @@ void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb
     daylight = daylight * daylight * (3.0f - 2.0f*daylight);
     sunInt = 0.05f + daylight * 0.95f;
     amb = 0.02f + daylight * 0.36f;
-    sky = glm::mix(glm::vec3(0.01,0.015,0.045), glm::vec3(0.53,0.81,0.92), daylight);
+
+    const glm::vec3 nightSky(0.01f, 0.015f, 0.045f);
+    const glm::vec3 daySky(0.53f, 0.81f, 0.92f);
+    const glm::vec3 sunriseSky(0.95f, 0.46f, 0.25f);
+    const glm::vec3 sunsetSky(0.98f, 0.34f, 0.14f);
+    const glm::vec3 twilightViolet(0.20f, 0.12f, 0.32f);
+
+    sky = glm::mix(nightSky, daySky, daylight);
+
+    // Minecraft-like dawn/dusk: when the sun is close to the horizon the sky
+    // warms to orange/peach, then falls through a short violet twilight band.
+    float horizonGlow = 1.0f - glm::smoothstep(0.04f, 0.36f, std::abs(sunDir.y));
+    float aboveHorizon = glm::smoothstep(-0.10f, 0.12f, sunDir.y);
+    float twilight = (1.0f - glm::smoothstep(0.00f, 0.28f, std::abs(sunDir.y))) * (1.0f - aboveHorizon);
+    glm::vec3 horizonColor = glm::mix(sunsetSky, sunriseSky, glm::smoothstep(-0.25f, 0.25f, sunDir.x));
+    sky = glm::mix(sky, horizonColor, horizonGlow * (0.45f + 0.35f * aboveHorizon));
+    sky = glm::mix(sky, twilightViolet, twilight * 0.45f);
+
+    float warmthBoost = horizonGlow * (0.35f + 0.30f * aboveHorizon);
+    sunInt = glm::clamp(sunInt + warmthBoost * 0.12f, 0.05f, 1.0f);
+    amb = glm::clamp(amb + warmthBoost * 0.05f, 0.02f, 0.40f);
 }
 void initReticle() {
     unsigned int vs = glCreateShader(GL_VERTEX_SHADER), fs = glCreateShader(GL_FRAGMENT_SHADER);

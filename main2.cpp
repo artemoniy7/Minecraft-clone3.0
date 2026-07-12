@@ -1138,6 +1138,7 @@ void addBlockLightInRegion(int x, int y, int z, uint8_t radius, const LightRegio
 }
 
 void rebuildBlockLightRegion(const LightRegion& rawRegion);
+void updateBlockLightIncremental(int x, int y, int z, int oldEmission, int newEmission);
 void rebuildSkyLightRegion(const LightRegion& rawRegion);
 void scheduleChunkMeshRebuildRegion(const LightRegion& rawRegion);
 
@@ -1154,7 +1155,7 @@ void updateSkyLightAt(int x, int y, int z) {
 }
 
 // Обработчик изменения блока - ТЕПЕРЬ ОБНОВЛЯЕТ И НЕБЕСНЫЙ СВЕТ ТОЖЕ
-void onBlockChangedGlobal(int x, int y, int z, bool updateSkyLight) {
+void onBlockChangedGlobal(int x, int y, int z, bool updateSkyLight, bool rebuildBlockLight) {
     if (updateSkyLight) {
         updateSkyLightAt(x, y, z);
     }
@@ -1166,15 +1167,18 @@ void onBlockChangedGlobal(int x, int y, int z, bool updateSkyLight) {
     region.maxY = std::min(CHUNK_SIZE_Y - 1, y + maxBlockLightRadius);
     region.minZ = z - maxBlockLightRadius;
     region.maxZ = z + maxBlockLightRadius;
-    rebuildBlockLightRegion(region);
+    if (rebuildBlockLight) {
+        rebuildBlockLightRegion(region);
+    }
 
     LightRegion meshRegion;
-    meshRegion.minX = updateSkyLight ? std::min(x - MAX_LIGHT, region.minX) : region.minX;
-    meshRegion.maxX = updateSkyLight ? std::max(x + MAX_LIGHT, region.maxX) : region.maxX;
+    const bool includeBlockLightRadius = rebuildBlockLight || maxBlockLightRadius > 0;
+    meshRegion.minX = updateSkyLight ? std::min(x - MAX_LIGHT, region.minX) : (includeBlockLightRadius ? region.minX : x);
+    meshRegion.maxX = updateSkyLight ? std::max(x + MAX_LIGHT, region.maxX) : (includeBlockLightRadius ? region.maxX : x);
     meshRegion.minY = 0;
     meshRegion.maxY = CHUNK_SIZE_Y - 1;
-    meshRegion.minZ = updateSkyLight ? std::min(z - MAX_LIGHT, region.minZ) : region.minZ;
-    meshRegion.maxZ = updateSkyLight ? std::max(z + MAX_LIGHT, region.maxZ) : region.maxZ;
+    meshRegion.minZ = updateSkyLight ? std::min(z - MAX_LIGHT, region.minZ) : (includeBlockLightRadius ? region.minZ : z);
+    meshRegion.maxZ = updateSkyLight ? std::max(z + MAX_LIGHT, region.maxZ) : (includeBlockLightRadius ? region.maxZ : z);
     scheduleChunkMeshRebuildRegion(meshRegion);
 }
 
@@ -4030,6 +4034,68 @@ void rebuildBlockLightRegion(const LightRegion& rawRegion) {
     }
 }
 
+void updateBlockLightIncremental(int x, int y, int z, int oldEmission, int newEmission) {
+    const int dirs[6][3] = {
+        {1,0,0}, {-1,0,0},
+        {0,1,0}, {0,-1,0},
+        {0,0,1}, {0,0,-1}
+    };
+
+    struct RemovalNode {
+        int x, y, z;
+        uint8_t light;
+    };
+
+    std::queue<RemovalNode> removalQueue;
+    std::queue<LightNode> addQueue;
+
+    if (oldEmission > 0) {
+        uint8_t startLight = std::max<uint8_t>(getBlockLightAt(x, y, z), static_cast<uint8_t>(std::min(oldEmission, MAX_LIGHT)));
+        setBlockLightAt(x, y, z, 0);
+        removalQueue.push({x, y, z, startLight});
+    }
+
+    const int MAX_REMOVAL_ITERATIONS = 50000;
+    int removalIterations = 0;
+    while (!removalQueue.empty() && removalIterations < MAX_REMOVAL_ITERATIONS) {
+        ++removalIterations;
+        RemovalNode node = removalQueue.front();
+        removalQueue.pop();
+
+        for (int i = 0; i < 6; ++i) {
+            int nx = node.x + dirs[i][0];
+            int ny = node.y + dirs[i][1];
+            int nz = node.z + dirs[i][2];
+            if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
+
+            uint8_t neighborLight = getBlockLightAt(nx, ny, nz);
+            if (neighborLight == 0) continue;
+
+            int blockId = getBlockAt(nx, ny, nz);
+            int emission = (blockId >= 0 && blockId < 256) ? blockLightEmission[blockId] : 0;
+            if (emission > 0 && neighborLight <= emission) {
+                addQueue.push({nx, ny, nz, nx, ny, nz, emission, static_cast<uint8_t>(std::min(emission, MAX_LIGHT))});
+                continue;
+            }
+
+            if (neighborLight < node.light) {
+                setBlockLightAt(nx, ny, nz, 0);
+                removalQueue.push({nx, ny, nz, neighborLight});
+            } else {
+                addQueue.push({nx, ny, nz, nx, ny, nz, neighborLight, neighborLight});
+            }
+        }
+    }
+
+    if (newEmission > 0) {
+        uint8_t sourceLight = static_cast<uint8_t>(std::min(newEmission, MAX_LIGHT));
+        setBlockLightAt(x, y, z, sourceLight);
+        addQueue.push({x, y, z, x, y, z, newEmission, sourceLight});
+    }
+
+    propagateBlockLightGlobal(addQueue);
+}
+
 void rebuildSkyLightRegion(const LightRegion& rawRegion) {
     LightRegion region = rawRegion;
     region.minY = std::max(0, region.minY);
@@ -4251,6 +4317,8 @@ void setBlockAt(int wx, int wy, int wz, int type) {
     int oldType = it->second.getLocalBlock(lx, wy, lz);
     const int oldOpacity = getLightOpacity(oldType);
     const int newOpacity = getLightOpacity(type);
+    const int oldEmission = (oldType >= 0 && oldType < 256) ? blockLightEmission[oldType] : 0;
+    const int newEmission = (type >= 0 && type < 256) ? blockLightEmission[type] : 0;
     bool skyLightRelevant = oldOpacity != newOpacity && (
         getSkyLightAt(wx, wy, wz) > 0 ||
         getSkyLightAt(wx + 1, wy, wz) > 0 || getSkyLightAt(wx - 1, wy, wz) > 0 ||
@@ -4267,8 +4335,18 @@ void setBlockAt(int wx, int wy, int wz, int type) {
     if (lz==CHUNK_SIZE_Z-1) { auto n=loadedChunks.find({cx,cz+1}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
     waterChunksCacheValid = false;
 
+    const bool lightEmitterChanged = oldEmission != newEmission;
+    if (lightEmitterChanged) {
+        updateBlockLightIncremental(wx, wy, wz, oldEmission, newEmission);
+        if (oldOpacity != newOpacity) {
+            updateSkyLightColumnsAround(wx, wz);
+        }
+    }
+
     // Глобальное обновление света планирует фоновую пересборку чанков со сменившимся светом.
-    onBlockChangedGlobal(wx, wy, wz, skyLightRelevant);
+    // Для светящихся блоков используем быстрый инкрементальный путь, чтобы установка/ломание
+    // не запускали полный пересчёт региона и не подвешивали игру.
+    onBlockChangedGlobal(wx, wy, wz, skyLightRelevant && !lightEmitterChanged, !lightEmitterChanged);
     rebuildChunkMeshesImmediatelyAround(cx, cz, lx, lz);
 }
 

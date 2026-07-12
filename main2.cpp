@@ -4371,9 +4371,18 @@ void setBlockAt(int wx, int wy, int wz, int type) {
         getSkyLightAt(wx, wy + 1, wz) > 0 || getSkyLightAt(wx, wy - 1, wz) > 0 ||
         getSkyLightAt(wx, wy, wz + 1) > 0 || getSkyLightAt(wx, wy, wz - 1) > 0
     );
+    bool blockLightRelevant = oldOpacity != newOpacity && (
+        getBlockLightAt(wx, wy, wz) > 0 ||
+        getBlockLightAt(wx + 1, wy, wz) > 0 || getBlockLightAt(wx - 1, wy, wz) > 0 ||
+        getBlockLightAt(wx, wy + 1, wz) > 0 || getBlockLightAt(wx, wy - 1, wz) > 0 ||
+        getBlockLightAt(wx, wy, wz + 1) > 0 || getBlockLightAt(wx, wy, wz - 1) > 0
+    );
     it->second.setLocalBlock(lx,wy,lz,type);
     if (!skyLightRelevant && oldOpacity != newOpacity) {
         skyLightRelevant = getSkyLightAt(wx, wy + 1, wz) > 0;
+    }
+    if (!blockLightRelevant && oldOpacity != newOpacity) {
+        blockLightRelevant = getBlockLightAt(wx, wy + 1, wz) > 0;
     }
     if (lx==0) { auto n=loadedChunks.find({cx-1,cz}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
     if (lx==CHUNK_SIZE_X-1) { auto n=loadedChunks.find({cx+1,cz}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
@@ -4392,7 +4401,7 @@ void setBlockAt(int wx, int wy, int wz, int type) {
     // Глобальное обновление света планирует фоновую пересборку чанков со сменившимся светом.
     // Для светящихся блоков используем быстрый инкрементальный путь, чтобы установка/ломание
     // не запускали полный пересчёт региона и не подвешивали игру.
-    onBlockChangedGlobal(wx, wy, wz, skyLightRelevant && !lightEmitterChanged, !lightEmitterChanged);
+    onBlockChangedGlobal(wx, wy, wz, skyLightRelevant && !lightEmitterChanged, blockLightRelevant && !lightEmitterChanged);
     rebuildChunkMeshesImmediatelyAround(cx, cz, lx, lz);
 }
 
@@ -7340,9 +7349,10 @@ void main() {
     float blockLightOnly = (u_isWater == 1) ? 0.0 : clamp(BlockLightLevel, 0.0, 1.0);
 
     // Minecraft-подобное постоянное затенение граней: без "солнца сбоку".
-    float faceShade = 0.86;
+    float faceShade = 0.80;
     if (n.y > 0.5) faceShade = 1.0;
-    else if (n.y < -0.5) faceShade = 0.72;
+    else if (n.y < -0.5) faceShade = 0.50;
+    else if (abs(n.x) > 0.5) faceShade = 0.60;
 
     float ambientFactor = mix(0.10, 1.0, pow(vertexLight, 1.15));
     float dayFactor = mix(0.55, 1.0, clamp(u_sunIntensity, 0.0, 1.0));

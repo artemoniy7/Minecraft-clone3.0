@@ -104,7 +104,10 @@ float fallDistance = 0.0f;
 float lastGroundY = 0.0f;
 bool wasOnGround = false;
 float invulnerabilityTimer = 0.0f;
-const float INVULNERABILITY_DURATION = 0.5f; // 0.5 секунды неуязвимости после получения урона
+const float INVULNERABILITY_DURATION = 0.5f; // 10 тиков (0.5 секунды) неуязвимости после получения урона, как в Minecraft
+bool jumpKeyWasPressed = false;
+float heldJumpRepeatTimer = 0.0f;
+const float HELD_JUMP_REPEAT_DELAY = 0.25f; // Задержка автопрыжка только при зажатом Space (5 тиков)
 const float MIN_FALL_DAMAGE_HEIGHT = 3.0f; // Минимальная высота для получения урона (3 блока)
 const float MAX_FALL_DAMAGE_HEIGHT = 23.0f; // Высота, с которой урон максимален (23 блока)
 // ----------------------------------------------------------------------
@@ -658,6 +661,8 @@ void resetPlayerStateForNewWorld() {
     fallDistance = 0.0f;
     lastGroundY = 0.0f;
     invulnerabilityTimer = 0.0f;
+    jumpKeyWasPressed = false;
+    heldJumpRepeatTimer = 0.0f;
     playerHealth = MAX_PLAYER_HEALTH;
     firstMouse = true;
 }
@@ -722,6 +727,8 @@ bool loadWorldMetadata(const std::string& folderName, bool applyPlayerState) {
         wasOnGround = false;
         fallDistance = 0.0f;
         invulnerabilityTimer = 0.0f;
+        jumpKeyWasPressed = false;
+        heldJumpRepeatTimer = 0.0f;
         firstMouse = true;
     }
 
@@ -5930,7 +5937,7 @@ void handleMainMenuClick(GLFWwindow* window, int button) {
 
 void updateGame(GLFWwindow* window, float deltaTime) {
     if (invulnerabilityTimer > 0.0f) {
-        invulnerabilityTimer -= deltaTime;
+        invulnerabilityTimer = std::max(0.0f, invulnerabilityTimer - deltaTime);
     }
     
     if (currentState == GameState::LOADING_GAME) {
@@ -6072,6 +6079,15 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
     
     // Прыжок/всплытие/ныряние
     const bool wantsJump = !inventoryOpen && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+    const bool jumpPressedThisFrame = wantsJump && !jumpKeyWasPressed;
+    jumpKeyWasPressed = wantsJump;
+
+    if (wantsJump && isOnGround) {
+        heldJumpRepeatTimer = std::max(0.0f, heldJumpRepeatTimer - deltaTime);
+    } else if (!wantsJump) {
+        heldJumpRepeatTimer = 0.0f;
+    }
+
     const bool wantsDive = !inventoryOpen && glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
     
     // =========================================================
@@ -6153,9 +6169,11 @@ void processInputInGame(GLFWwindow* window, float deltaTime) {
         // ВЕРТИКАЛЬНАЯ ФИЗИКА (НА СУШЕ)
         // =========================================================
         
-        if (wantsJump && isOnGround) {
+        const bool canStartJump = jumpPressedThisFrame || heldJumpRepeatTimer <= 0.0f;
+        if (wantsJump && canStartJump && isOnGround) {
             playerVelocity.y = JUMP_POWER;
             isOnGround = false;
+            heldJumpRepeatTimer = HELD_JUMP_REPEAT_DELAY;
             soundManager.playPlayerSound("step", gameStarted);
         }
         

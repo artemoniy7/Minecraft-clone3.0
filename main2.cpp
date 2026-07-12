@@ -1777,10 +1777,22 @@ constexpr int LANGUAGE_BUTTON_COUNT = 1;
 constexpr int OPTIONS_ROW1_BUTTON_COUNT = 4;
 constexpr int OPTIONS_ROW2_BUTTON_COUNT = 5;
 struct Button {
-    float relX, relY, relW, relH;
-    float absX, absY, absW, absH;
-    bool clicked;
-    const char* label;
+    float relX = 0.0f, relY = 0.0f, relW = 0.0f, relH = 0.0f;
+    float absX = 0.0f, absY = 0.0f, absW = 0.0f, absH = 0.0f;
+    bool clicked = false;
+    const char* label = "";
+
+    void updateAbsolute(int screenW, int screenH) {
+        absW = relW * screenW;
+        absH = relH * screenH;
+        absX = relX * screenW - absW * 0.5f;
+        absY = relY * screenH - absH * 0.5f;
+    }
+
+    void setAbsolute(float x, float y, float w, float h, const char* text = nullptr) {
+        absX = x; absY = y; absW = w; absH = h;
+        if (text) label = text;
+    }
 };
 
 enum class UILanguage {
@@ -2682,33 +2694,11 @@ void loadHUDTextures() {
 }
 
 void updateButtonPositions(int screenW, int screenH) {
-    for (int i=0; i<MAIN_MENU_BUTTON_COUNT; ++i) {
-        buttons[i].absW = buttons[i].relW * screenW;
-        buttons[i].absH = buttons[i].relH * screenH;
-        buttons[i].absX = buttons[i].relX * screenW - buttons[i].absW/2;
-        buttons[i].absY = buttons[i].relY * screenH - buttons[i].absH/2;
-    }
-    for (int i=0; i<WORLD_SELECT_BUTTON_COUNT; ++i) {
-        worldButtons[i].absW = worldButtons[i].relW * screenW;
-        worldButtons[i].absH = worldButtons[i].relH * screenH;
-        worldButtons[i].absX = worldButtons[i].relX * screenW - worldButtons[i].absW/2;
-        worldButtons[i].absY = worldButtons[i].relY * screenH - worldButtons[i].absH/2;
-    }
-    for (int i=0; i<LANGUAGE_BUTTON_COUNT; ++i) {
-        languageButtons[i].absW = languageButtons[i].relW * screenW;
-        languageButtons[i].absH = languageButtons[i].relH * screenH;
-        languageButtons[i].absX = languageButtons[i].relX * screenW - languageButtons[i].absW/2;
-        languageButtons[i].absY = languageButtons[i].relY * screenH - languageButtons[i].absH/2;
-    }
-    pauseResumeButton.absW = pauseResumeButton.relW * screenW;
-    pauseResumeButton.absH = pauseResumeButton.relH * screenH;
-    pauseResumeButton.absX = pauseResumeButton.relX * screenW - pauseResumeButton.absW/2;
-    pauseResumeButton.absY = pauseResumeButton.relY * screenH - pauseResumeButton.absH/2;
-
-    pauseExitButton.absW = pauseExitButton.relW * screenW;
-    pauseExitButton.absH = pauseExitButton.relH * screenH;
-    pauseExitButton.absX = pauseExitButton.relX * screenW - pauseExitButton.absW/2;
-    pauseExitButton.absY = pauseExitButton.relY * screenH - pauseExitButton.absH/2;
+    for (auto& btn : buttons) btn.updateAbsolute(screenW, screenH);
+    for (auto& btn : worldButtons) btn.updateAbsolute(screenW, screenH);
+    for (auto& btn : languageButtons) btn.updateAbsolute(screenW, screenH);
+    pauseResumeButton.updateAbsolute(screenW, screenH);
+    pauseExitButton.updateAbsolute(screenW, screenH);
 }
 
 void updatePhotoPosition(int screenW, int screenH) {
@@ -5679,10 +5669,7 @@ void renderDeleteWorldConfirmMenu(int screenW, int screenH) {
                               glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
 
     for (int i = 0; i < DELETE_CONFIRM_BUTTON_COUNT; ++i) {
-        deleteConfirmButtons[i].absW = deleteConfirmButtons[i].relW * screenW;
-        deleteConfirmButtons[i].absH = deleteConfirmButtons[i].relH * screenH;
-        deleteConfirmButtons[i].absX = deleteConfirmButtons[i].relX * screenW - deleteConfirmButtons[i].absW / 2.0f;
-        deleteConfirmButtons[i].absY = deleteConfirmButtons[i].relY * screenH - deleteConfirmButtons[i].absH / 2.0f;
+        deleteConfirmButtons[i].updateAbsolute(screenW, screenH);
 
         const bool hovered = isMouseOverButton(deleteConfirmButtons[i], mouseX, mouseY);
         unsigned int tex = (hovered && menuButtonHighlightTexture) ? menuButtonHighlightTexture : menuButtonTexture;
@@ -5843,43 +5830,25 @@ void updateOptionsLayout(int screenW, int screenH) {
 
     // Difficulty справа от FOV
     optionsDifficultyButton.label = tr("Difficulty: Hard", "Сложность: Сложно", "難易度: ハード");
-    optionsDifficultyButton.absW = buttonW;
-    optionsDifficultyButton.absH = buttonH;
-    optionsDifficultyButton.absX = rightX;
-    optionsDifficultyButton.absY = topY - buttonH * 0.5f + yOffset;
+    optionsDifficultyButton.setAbsolute(rightX, topY - buttonH * 0.5f + yOffset, buttonW, buttonH);
 
     // Структура как на скриншоте
     // Одиночная кнопка справа под Difficulty
-    optionsRow2Buttons[4].label = "Super Secret Settings...";
-    optionsRow2Buttons[4].absX = rightX;
-    optionsRow2Buttons[4].absY = optionsDifficultyButton.absY + buttonH + rowGap;
-    optionsRow2Buttons[4].absW = buttonW;
-    optionsRow2Buttons[4].absH = buttonH;
+    optionsRow2Buttons[4].setAbsolute(rightX, optionsDifficultyButton.absY + buttonH + rowGap, buttonW, buttonH, "Super Secret Settings...");
 
     // Две колонки ниже
     const float startRowsY = optionsRow2Buttons[4].absY + buttonH + rowGap;
     const char* leftLabels[4] = { "Music & Sounds...", "Video Settings...", "Language...", "Resource Packs..." };
     const char* rightLabels[4] = { "Broadcast Settings...", "Controls...", "Multiplayer Settings...", "Snooper Settings..." };
     for (int i = 0; i < 4; ++i) {
-        optionsRow1Buttons[i].absW = buttonW;
-        optionsRow1Buttons[i].absH = buttonH;
-        optionsRow2Buttons[i].absW = buttonW;
-        optionsRow2Buttons[i].absH = buttonH;
-
-        optionsRow1Buttons[i].absX = leftX;
-        optionsRow1Buttons[i].absY = startRowsY + i * (buttonH + rowGap * 0.55f);
-        optionsRow1Buttons[i].label = leftLabels[i];
-
-        optionsRow2Buttons[i].absX = rightX;
-        optionsRow2Buttons[i].absY = startRowsY + i * (buttonH + rowGap * 0.55f);
-        optionsRow2Buttons[i].label = rightLabels[i];
+        const float rowY = startRowsY + i * (buttonH + rowGap * 0.55f);
+        optionsRow1Buttons[i].setAbsolute(leftX, rowY, buttonW, buttonH, leftLabels[i]);
+        optionsRow2Buttons[i].setAbsolute(rightX, rowY, buttonW, buttonH, rightLabels[i]);
     }
 
-    optionsDoneButton.label = tr("Done", "Готово", "完了");
-    optionsDoneButton.absW = 560.0f * OPTIONS_UI_SCALE;
-    optionsDoneButton.absH = 50.0f * OPTIONS_UI_SCALE;
-    optionsDoneButton.absX = (screenW - optionsDoneButton.absW) * 0.5f;
-    optionsDoneButton.absY = optionsRow1Buttons[3].absY + buttonH + 46.0f * OPTIONS_UI_SCALE;
+    const float doneW = 560.0f * OPTIONS_UI_SCALE;
+    const float doneH = 50.0f * OPTIONS_UI_SCALE;
+    optionsDoneButton.setAbsolute((screenW - doneW) * 0.5f, optionsRow1Buttons[3].absY + buttonH + 46.0f * OPTIONS_UI_SCALE, doneW, doneH, tr("Done", "Готово", "完了"));
 }
 
 void handleWorldSelectMenuClick(GLFWwindow* window, int button) {

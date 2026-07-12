@@ -154,6 +154,8 @@ void integratePendingChunkData(int maxPerFrame);
 void buildChunkMeshesNearCamera(int maxPerFrame);
 void rebuildChunkMeshesImmediatelyAround(int cx, int cz, int lx, int lz);
 void processPendingLightMeshRebuilds(int maxPerFrame);
+void scheduleSkyLightColumnsAroundAsync(int x, int z);
+void processPendingSkyLightColumnUpdates(int maxColumnsPerFrame);
 void initReticle();
 void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb, glm::vec3& sky);
 void checkShaderErrors(unsigned int s, const std::string& t);
@@ -1632,10 +1634,55 @@ static std::queue<glm::ivec2> pendingBlockLightRebuildChunks;
 static std::unordered_set<glm::ivec2, hash_ivec2> queuedBlockLightRebuildChunks;
 static std::queue<glm::ivec2> pendingLightMeshRebuildChunks;
 static std::unordered_set<glm::ivec2, hash_ivec2> queuedLightMeshRebuildChunks;
+static std::queue<glm::ivec2> pendingSkyLightColumnUpdates;
+static std::unordered_set<glm::ivec2, hash_ivec2> queuedSkyLightColumnUpdates;
 static Chunk* lastChunkForMesh = nullptr;
 static glm::ivec2 lastChunkCoordsForMesh(0,0);
 
 static GLint u_modelLoc = -1, u_viewLoc = -1, u_projLoc = -1;
+
+void scheduleSkyLightColumnAsync(int x, int z) {
+    glm::ivec2 column(x, z);
+    if (queuedSkyLightColumnUpdates.insert(column).second) {
+        pendingSkyLightColumnUpdates.push(column);
+    }
+}
+
+void scheduleSkyLightColumnsAroundAsync(int x, int z) {
+    const int offsets[5][2] = {
+        {0, 0},
+        {1, 0},
+        {-1, 0},
+        {0, 1},
+        {0, -1}
+    };
+
+    for (int i = 0; i < 5; ++i) {
+        scheduleSkyLightColumnAsync(x + offsets[i][0], z + offsets[i][1]);
+    }
+}
+
+void processPendingSkyLightColumnUpdates(int maxColumnsPerFrame) {
+    auto floorDiv = [](int value, int divisor) {
+        return (value >= 0) ? value / divisor : (value - divisor + 1) / divisor;
+    };
+
+    int processed = 0;
+    while (processed < maxColumnsPerFrame && !pendingSkyLightColumnUpdates.empty()) {
+        glm::ivec2 column = pendingSkyLightColumnUpdates.front();
+        pendingSkyLightColumnUpdates.pop();
+        queuedSkyLightColumnUpdates.erase(column);
+
+        rebuildSkyLightColumnBase(column.x, column.y);
+        smoothSkyLightColumn(column.x, column.y);
+
+        glm::ivec2 chunkPos(floorDiv(column.x, CHUNK_SIZE_X), floorDiv(column.y, CHUNK_SIZE_Z));
+        if (queuedLightMeshRebuildChunks.insert(chunkPos).second) {
+            pendingLightMeshRebuildChunks.push(chunkPos);
+        }
+        ++processed;
+    }
+}
 
 constexpr float DAY_DURATION_SECONDS = 60.0f;
 constexpr float NIGHT_DURATION_SECONDS = 60.0f;
@@ -4394,7 +4441,7 @@ void setBlockAt(int wx, int wy, int wz, int type) {
     if (lightEmitterChanged) {
         updateBlockLightIncremental(wx, wy, wz, oldEmission, newEmission);
         if (oldOpacity != newOpacity) {
-            updateSkyLightColumnsAround(wx, wz);
+            scheduleSkyLightColumnsAroundAsync(wx, wz);
         }
     }
 
@@ -4402,7 +4449,7 @@ void setBlockAt(int wx, int wy, int wz, int type) {
     // по всей высоте мира и именно на обычных блоках даёт заметный фриз. Для смены
     // непрозрачности достаточно дешёвого вертикального обновления ближайших колонок.
     if (!lightEmitterChanged && skyLightRelevant) {
-        updateSkyLightColumnsAround(wx, wz);
+        scheduleSkyLightColumnsAroundAsync(wx, wz);
     }
 
     // Полную перестройку блочного света оставляем только когда рядом реально был
@@ -4451,6 +4498,7 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
     const int integrateBudget = fastChunkLoadingMode ? 24 : 2;
     integratePendingChunkData(integrateBudget);
     processPendingBlockLightRebuilds(fastChunkLoadingMode ? 2 : 1);
+    processPendingSkyLightColumnUpdates(fastChunkLoadingMode ? 24 : 2);
     processPendingLightMeshRebuilds(fastChunkLoadingMode ? 6 : 8);
 
     if (!loadedChunks.empty() && lastRequestedCenter.x == centerCX && lastRequestedCenter.y == centerCZ) {
@@ -5197,6 +5245,8 @@ void exitToMenu(GLFWwindow* window, int& sw, int& sh) {
     waterChunksCacheValid = false;
     pendingLightMeshRebuildChunks = std::queue<glm::ivec2>();
     queuedLightMeshRebuildChunks.clear();
+    pendingSkyLightColumnUpdates = std::queue<glm::ivec2>();
+    queuedSkyLightColumnUpdates.clear();
     {
         std::lock_guard<std::mutex> lock(chunkMutex);
         pendingData.clear();

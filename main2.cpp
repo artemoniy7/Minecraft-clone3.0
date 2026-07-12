@@ -1137,10 +1137,19 @@ void addBlockLightInRegion(int x, int y, int z, uint8_t radius, const LightRegio
 }
 
 void rebuildBlockLightRegion(const LightRegion& rawRegion);
+void rebuildSkyLightRegion(const LightRegion& rawRegion);
+void rebuildChunkMeshesInRegion(const LightRegion& rawRegion);
 
 // Обновление небесного света при изменении блока
 void updateSkyLightAt(int x, int y, int z) {
-    updateSkyLightColumnsAround(x, z);
+    LightRegion region;
+    region.minX = x - MAX_LIGHT;
+    region.maxX = x + MAX_LIGHT;
+    region.minY = 0;
+    region.maxY = CHUNK_SIZE_Y - 1;
+    region.minZ = z - MAX_LIGHT;
+    region.maxZ = z + MAX_LIGHT;
+    rebuildSkyLightRegion(region);
 }
 
 // Обработчик изменения блока - ТЕПЕРЬ ОБНОВЛЯЕТ И НЕБЕСНЫЙ СВЕТ ТОЖЕ
@@ -1155,6 +1164,15 @@ void onBlockChangedGlobal(int x, int y, int z) {
     region.minZ = z - maxBlockLightRadius;
     region.maxZ = z + maxBlockLightRadius;
     rebuildBlockLightRegion(region);
+
+    LightRegion meshRegion;
+    meshRegion.minX = std::min(x - MAX_LIGHT, region.minX);
+    meshRegion.maxX = std::max(x + MAX_LIGHT, region.maxX);
+    meshRegion.minY = 0;
+    meshRegion.maxY = CHUNK_SIZE_Y - 1;
+    meshRegion.minZ = std::min(z - MAX_LIGHT, region.minZ);
+    meshRegion.maxZ = std::max(z + MAX_LIGHT, region.maxZ);
+    rebuildChunkMeshesInRegion(meshRegion);
 }
 
 void rebuildBlockLightAroundChunk(int cx, int cz) {
@@ -4005,6 +4023,84 @@ void rebuildBlockLightRegion(const LightRegion& rawRegion) {
     }
 }
 
+void rebuildSkyLightRegion(const LightRegion& rawRegion) {
+    LightRegion region = rawRegion;
+    region.minY = std::max(0, region.minY);
+    region.maxY = std::min(CHUNK_SIZE_Y - 1, region.maxY);
+    if (region.minY > region.maxY) return;
+
+    for (int x = region.minX; x <= region.maxX; ++x) {
+        for (int z = region.minZ; z <= region.maxZ; ++z) {
+            for (int y = region.minY; y <= region.maxY; ++y) {
+                setSkyLightAt(x, y, z, 0);
+            }
+        }
+    }
+
+    std::queue<LightNode> queue;
+    for (int x = region.minX; x <= region.maxX; ++x) {
+        for (int z = region.minZ; z <= region.maxZ; ++z) {
+            bool blockedAbove = false;
+            for (int y = CHUNK_SIZE_Y - 1; y >= 0; --y) {
+                int blockId = getBlockAt(x, y, z);
+                if (isOpaque(blockId)) {
+                    blockedAbove = true;
+                    if (isInsideLightRegion(region, x, y, z)) {
+                        setSkyLightAt(x, y, z, 0);
+                    }
+                    continue;
+                }
+
+                if (!blockedAbove && isInsideLightRegion(region, x, y, z)) {
+                    setSkyLightAt(x, y, z, static_cast<uint8_t>(MAX_LIGHT));
+                    queue.push({x, y, z, x, y, z, MAX_LIGHT, static_cast<uint8_t>(MAX_LIGHT)});
+                }
+            }
+        }
+    }
+
+    const int dirs[6][3] = {
+        {1,0,0}, {-1,0,0},
+        {0,1,0}, {0,-1,0},
+        {0,0,1}, {0,0,-1}
+    };
+
+    const int MAX_ITERATIONS = 250000;
+    int iterations = 0;
+    while (!queue.empty() && iterations < MAX_ITERATIONS) {
+        ++iterations;
+        LightNode node = queue.front();
+        queue.pop();
+
+        for (int i = 0; i < 6; ++i) {
+            int nx = node.x + dirs[i][0];
+            int ny = node.y + dirs[i][1];
+            int nz = node.z + dirs[i][2];
+
+            if (!isInsideLightRegion(region, nx, ny, nz)) continue;
+            if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
+
+            int blockId = getBlockAt(nx, ny, nz);
+            int opacity = getLightOpacity(blockId);
+            if (opacity > MAX_LIGHT) continue;
+
+            int attenuation = opacity;
+            if (dirs[i][1] == -1 && dirs[i][0] == 0 && dirs[i][2] == 0 && opacity == 0 && node.light == MAX_LIGHT) {
+                attenuation = 0;
+            } else {
+                attenuation = std::max(1, attenuation);
+            }
+
+            if (node.light <= attenuation) continue;
+            uint8_t newLight = static_cast<uint8_t>(node.light - attenuation);
+            if (newLight > getSkyLightAt(nx, ny, nz)) {
+                setSkyLightAt(nx, ny, nz, newLight);
+                queue.push({nx, ny, nz, node.sourceX, node.sourceY, node.sourceZ, node.radius, newLight});
+            }
+        }
+    }
+}
+
 // Глобальные функции доступа к свету (реализация)
 uint8_t getSkyLightAt(int wx, int wy, int wz) {
     if (wy < 0 || wy >= CHUNK_SIZE_Y) return 0;
@@ -4152,9 +4248,8 @@ void setBlockAt(int wx, int wy, int wz, int type) {
     if (lz==CHUNK_SIZE_Z-1) { auto n=loadedChunks.find({cx,cz+1}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
     waterChunksCacheValid = false;
 
-    // Глобальное обновление света
+    // Глобальное обновление света пересобирает все чанки, где изменились значения света.
     onBlockChangedGlobal(wx, wy, wz);
-    rebuildChunkMeshesImmediatelyAround(cx, cz, lx, lz);
 }
 
 void integratePendingChunkData(int maxPerFrame) {
@@ -4274,6 +4369,25 @@ void rebuildChunkMeshesImmediatelyAround(int cx, int cz, int lx, int lz) {
         if (it == loadedChunks.end()) continue;
         if (!it->second.data) continue;
         it->second.buildMesh();
+    }
+}
+
+void rebuildChunkMeshesInRegion(const LightRegion& rawRegion) {
+    auto floorDiv = [](int value, int divisor) {
+        return (value >= 0) ? value / divisor : (value - divisor + 1) / divisor;
+    };
+
+    int minCX = floorDiv(rawRegion.minX, CHUNK_SIZE_X);
+    int maxCX = floorDiv(rawRegion.maxX, CHUNK_SIZE_X);
+    int minCZ = floorDiv(rawRegion.minZ, CHUNK_SIZE_Z);
+    int maxCZ = floorDiv(rawRegion.maxZ, CHUNK_SIZE_Z);
+
+    for (int cx = minCX; cx <= maxCX; ++cx) {
+        for (int cz = minCZ; cz <= maxCZ; ++cz) {
+            auto it = loadedChunks.find({cx, cz});
+            if (it == loadedChunks.end() || !it->second.data) continue;
+            it->second.buildMesh();
+        }
     }
 }
 

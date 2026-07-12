@@ -154,6 +154,7 @@ void integratePendingChunkData(int maxPerFrame);
 void buildChunkMeshesNearCamera(int maxPerFrame);
 void rebuildChunkMeshesImmediatelyAround(int cx, int cz, int lx, int lz);
 void processPendingLightMeshRebuilds(int maxPerFrame);
+void processPendingInteractionMeshRebuilds(int maxPerFrame);
 void scheduleSkyLightColumnsAroundAsync(int x, int z);
 void processPendingSkyLightColumnUpdates(int maxColumnsPerFrame);
 void initReticle();
@@ -1634,6 +1635,9 @@ static std::queue<glm::ivec2> pendingBlockLightRebuildChunks;
 static std::unordered_set<glm::ivec2, hash_ivec2> queuedBlockLightRebuildChunks;
 static std::queue<glm::ivec2> pendingLightMeshRebuildChunks;
 static std::unordered_set<glm::ivec2, hash_ivec2> queuedLightMeshRebuildChunks;
+static std::queue<glm::ivec2> pendingInteractionMeshRebuildChunks;
+static std::unordered_set<glm::ivec2, hash_ivec2> queuedInteractionMeshRebuildChunks;
+static double lastInteractionMeshRebuildTime = 0.0;
 static std::queue<glm::ivec2> pendingSkyLightColumnUpdates;
 static std::unordered_set<glm::ivec2, hash_ivec2> queuedSkyLightColumnUpdates;
 static Chunk* lastChunkForMesh = nullptr;
@@ -4455,7 +4459,9 @@ void setBlockAt(int wx, int wy, int wz, int type) {
     // Полную перестройку блочного света оставляем только когда рядом реально был
     // распространяющийся блочный свет. В обычном случае это false, поэтому постановка
     // камня/земли/досок больше не запускает тяжёлый пересчёт освещения региона.
-    onBlockChangedGlobal(wx, wy, wz, false, blockLightRelevant && !lightEmitterChanged);
+    if (blockLightRelevant && !lightEmitterChanged) {
+        onBlockChangedGlobal(wx, wy, wz, false, true);
+    }
     rebuildChunkMeshesImmediatelyAround(cx, cz, lx, lz);
 }
 
@@ -4499,7 +4505,8 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
     integratePendingChunkData(integrateBudget);
     processPendingBlockLightRebuilds(fastChunkLoadingMode ? 2 : 1);
     processPendingSkyLightColumnUpdates(fastChunkLoadingMode ? 24 : 2);
-    processPendingLightMeshRebuilds(fastChunkLoadingMode ? 6 : 8);
+    processPendingInteractionMeshRebuilds(1);
+    processPendingLightMeshRebuilds(fastChunkLoadingMode ? 6 : 4);
 
     if (!loadedChunks.empty() && lastRequestedCenter.x == centerCX && lastRequestedCenter.y == centerCZ) {
         return;
@@ -4573,18 +4580,39 @@ void rebuildChunkMeshesImmediatelyAround(int cx, int cz, int lx, int lz) {
     if (lz == 0) rebuildList[rebuildCount++] = {cx, cz - 1};
     if (lz == CHUNK_SIZE_Z - 1) rebuildList[rebuildCount++] = {cx, cz + 1};
 
+    lastInteractionMeshRebuildTime = glfwGetTime();
+
     for (int i = 0; i < rebuildCount; ++i) {
         auto it = loadedChunks.find(rebuildList[i]);
         if (it == loadedChunks.end() || !it->second.data) continue;
 
-        // Исторически эта функция пересобирала меш прямо из mouse_callback.
-        // buildMesh() делает CPU-проход по чанку и GL-загрузку буферов, поэтому
-        // быстрые клики по блокам давали заметные просадки. Теперь только ставим
-        // чанк в уже существующую очередь; processPendingLightMeshRebuilds заберёт
-        // небольшое число задач за кадр, сохраняя отзывчивость ввода.
-        if (queuedLightMeshRebuildChunks.insert(rebuildList[i]).second) {
-            pendingLightMeshRebuildChunks.push(rebuildList[i]);
+        // Обычная постановка/ломание не должна попадать в световую очередь,
+        // иначе следующий кадр всё равно ловит buildMesh()-спайк. Держим
+        // отдельную, медленную очередь пользовательских правок.
+        if (queuedInteractionMeshRebuildChunks.insert(rebuildList[i]).second) {
+            pendingInteractionMeshRebuildChunks.push(rebuildList[i]);
         }
+    }
+}
+
+void processPendingInteractionMeshRebuilds(int maxPerFrame) {
+    if (pendingInteractionMeshRebuildChunks.empty()) return;
+
+    const double now = glfwGetTime();
+    constexpr double MIN_SECONDS_BETWEEN_INTERACTION_MESH_BUILDS = 0.045;
+    if (now - lastInteractionMeshRebuildTime < MIN_SECONDS_BETWEEN_INTERACTION_MESH_BUILDS) return;
+
+    int processed = 0;
+    while (processed < maxPerFrame && !pendingInteractionMeshRebuildChunks.empty()) {
+        glm::ivec2 chunkPos = pendingInteractionMeshRebuildChunks.front();
+        pendingInteractionMeshRebuildChunks.pop();
+        queuedInteractionMeshRebuildChunks.erase(chunkPos);
+
+        auto it = loadedChunks.find(chunkPos);
+        if (it == loadedChunks.end() || !it->second.data) continue;
+        it->second.buildMesh();
+        lastInteractionMeshRebuildTime = now;
+        ++processed;
     }
 }
 
@@ -5245,6 +5273,9 @@ void exitToMenu(GLFWwindow* window, int& sw, int& sh) {
     waterChunksCacheValid = false;
     pendingLightMeshRebuildChunks = std::queue<glm::ivec2>();
     queuedLightMeshRebuildChunks.clear();
+    pendingInteractionMeshRebuildChunks = std::queue<glm::ivec2>();
+    queuedInteractionMeshRebuildChunks.clear();
+    lastInteractionMeshRebuildTime = 0.0;
     pendingSkyLightColumnUpdates = std::queue<glm::ivec2>();
     queuedSkyLightColumnUpdates.clear();
     {

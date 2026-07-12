@@ -3547,8 +3547,10 @@ struct Chunk {
         int idx = (x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z;
         int oldId = data->blocks[idx];
         data->blocks[idx] = id;
-        meshReady = false; dirty = true;
-        // Глобальное обновление света будет вызвано из setBlockAt
+        dirty = true;
+        // Не сбрасываем meshReady сразу: старый меш остаётся на экране,
+        // а новая геометрия планируется в очередь и пересобирается по бюджету кадра.
+        // Это убирает фриз и исчезновение чанка при обычной установке/ломании блока.
     }
 
     bool isAOSolid(int wx, int wy, int wz) const {
@@ -4384,10 +4386,8 @@ void setBlockAt(int wx, int wy, int wz, int type) {
     if (!blockLightRelevant && oldOpacity != newOpacity) {
         blockLightRelevant = getBlockLightAt(wx, wy + 1, wz) > 0;
     }
-    if (lx==0) { auto n=loadedChunks.find({cx-1,cz}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
-    if (lx==CHUNK_SIZE_X-1) { auto n=loadedChunks.find({cx+1,cz}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
-    if (lz==0) { auto n=loadedChunks.find({cx,cz-1}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
-    if (lz==CHUNK_SIZE_Z-1) { auto n=loadedChunks.find({cx,cz+1}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
+    // Соседние чанки больше не инвалидируются синхронно: если блок стоит на границе,
+    // rebuildChunkMeshesImmediatelyAround ниже поставит нужные чанки в очередь.
     waterChunksCacheValid = false;
 
     const bool lightEmitterChanged = oldEmission != newEmission;
@@ -4398,10 +4398,17 @@ void setBlockAt(int wx, int wy, int wz, int type) {
         }
     }
 
-    // Глобальное обновление света планирует фоновую пересборку чанков со сменившимся светом.
-    // Для светящихся блоков используем быстрый инкрементальный путь, чтобы установка/ломание
-    // не запускали полный пересчёт региона и не подвешивали игру.
-    onBlockChangedGlobal(wx, wy, wz, skyLightRelevant && !lightEmitterChanged, blockLightRelevant && !lightEmitterChanged);
+    // Не запускаем полный rebuildSkyLightRegion из пути клика: он обходит большую область
+    // по всей высоте мира и именно на обычных блоках даёт заметный фриз. Для смены
+    // непрозрачности достаточно дешёвого вертикального обновления ближайших колонок.
+    if (!lightEmitterChanged && skyLightRelevant) {
+        updateSkyLightColumnsAround(wx, wz);
+    }
+
+    // Полную перестройку блочного света оставляем только когда рядом реально был
+    // распространяющийся блочный свет. В обычном случае это false, поэтому постановка
+    // камня/земли/досок больше не запускает тяжёлый пересчёт освещения региона.
+    onBlockChangedGlobal(wx, wy, wz, false, blockLightRelevant && !lightEmitterChanged);
     rebuildChunkMeshesImmediatelyAround(cx, cz, lx, lz);
 }
 
@@ -4444,7 +4451,7 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
     const int integrateBudget = fastChunkLoadingMode ? 24 : 2;
     integratePendingChunkData(integrateBudget);
     processPendingBlockLightRebuilds(fastChunkLoadingMode ? 2 : 1);
-    processPendingLightMeshRebuilds(fastChunkLoadingMode ? 6 : 1);
+    processPendingLightMeshRebuilds(fastChunkLoadingMode ? 6 : 8);
 
     if (!loadedChunks.empty() && lastRequestedCenter.x == centerCX && lastRequestedCenter.y == centerCZ) {
         return;
@@ -4520,9 +4527,16 @@ void rebuildChunkMeshesImmediatelyAround(int cx, int cz, int lx, int lz) {
 
     for (int i = 0; i < rebuildCount; ++i) {
         auto it = loadedChunks.find(rebuildList[i]);
-        if (it == loadedChunks.end()) continue;
-        if (!it->second.data) continue;
-        it->second.buildMesh();
+        if (it == loadedChunks.end() || !it->second.data) continue;
+
+        // Исторически эта функция пересобирала меш прямо из mouse_callback.
+        // buildMesh() делает CPU-проход по чанку и GL-загрузку буферов, поэтому
+        // быстрые клики по блокам давали заметные просадки. Теперь только ставим
+        // чанк в уже существующую очередь; processPendingLightMeshRebuilds заберёт
+        // небольшое число задач за кадр, сохраняя отзывчивость ввода.
+        if (queuedLightMeshRebuildChunks.insert(rebuildList[i]).second) {
+            pendingLightMeshRebuildChunks.push(rebuildList[i]);
+        }
     }
 }
 

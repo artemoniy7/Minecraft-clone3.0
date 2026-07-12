@@ -1172,7 +1172,7 @@ void onBlockChangedGlobal(int x, int y, int z, bool updateSkyLight, bool rebuild
     }
 
     LightRegion meshRegion;
-    const bool includeBlockLightRadius = rebuildBlockLight || maxBlockLightRadius > 0;
+    const bool includeBlockLightRadius = rebuildBlockLight;
     meshRegion.minX = updateSkyLight ? std::min(x - MAX_LIGHT, region.minX) : (includeBlockLightRadius ? region.minX : x);
     meshRegion.maxX = updateSkyLight ? std::max(x + MAX_LIGHT, region.maxX) : (includeBlockLightRadius ? region.maxX : x);
     meshRegion.minY = 0;
@@ -4048,10 +4048,22 @@ void updateBlockLightIncremental(int x, int y, int z, int oldEmission, int newEm
 
     std::queue<RemovalNode> removalQueue;
     std::queue<LightNode> addQueue;
+    LightRegion changedRegion{x, x, y, y, z, z};
+    bool hasLightChanges = false;
+    auto markLightChanged = [&](int cx, int cy, int cz) {
+        hasLightChanges = true;
+        changedRegion.minX = std::min(changedRegion.minX, cx);
+        changedRegion.maxX = std::max(changedRegion.maxX, cx);
+        changedRegion.minY = std::min(changedRegion.minY, cy);
+        changedRegion.maxY = std::max(changedRegion.maxY, cy);
+        changedRegion.minZ = std::min(changedRegion.minZ, cz);
+        changedRegion.maxZ = std::max(changedRegion.maxZ, cz);
+    };
 
     if (oldEmission > 0) {
         uint8_t startLight = std::max<uint8_t>(getBlockLightAt(x, y, z), static_cast<uint8_t>(std::min(oldEmission, MAX_LIGHT)));
         setBlockLightAt(x, y, z, 0);
+        markLightChanged(x, y, z);
         removalQueue.push({x, y, z, startLight});
     }
 
@@ -4080,6 +4092,7 @@ void updateBlockLightIncremental(int x, int y, int z, int oldEmission, int newEm
 
             if (neighborLight < node.light) {
                 setBlockLightAt(nx, ny, nz, 0);
+                markLightChanged(nx, ny, nz);
                 removalQueue.push({nx, ny, nz, neighborLight});
             } else {
                 addQueue.push({nx, ny, nz, nx, ny, nz, neighborLight, neighborLight});
@@ -4090,10 +4103,43 @@ void updateBlockLightIncremental(int x, int y, int z, int oldEmission, int newEm
     if (newEmission > 0) {
         uint8_t sourceLight = static_cast<uint8_t>(std::min(newEmission, MAX_LIGHT));
         setBlockLightAt(x, y, z, sourceLight);
+        markLightChanged(x, y, z);
         addQueue.push({x, y, z, x, y, z, newEmission, sourceLight});
     }
 
-    propagateBlockLightGlobal(addQueue);
+    const int MAX_ADD_ITERATIONS = 50000;
+    int addIterations = 0;
+    while (!addQueue.empty() && addIterations < MAX_ADD_ITERATIONS) {
+        ++addIterations;
+        LightNode node = addQueue.front();
+        addQueue.pop();
+
+        if (node.light <= 1) continue;
+        uint8_t propagatedLight = static_cast<uint8_t>(node.light - 1);
+
+        for (int i = 0; i < 6; ++i) {
+            int nx = node.x + dirs[i][0];
+            int ny = node.y + dirs[i][1];
+            int nz = node.z + dirs[i][2];
+            if (ny < 0 || ny >= CHUNK_SIZE_Y) continue;
+
+            int blockId = getBlockAt(nx, ny, nz);
+            if (isOpaque(blockId)) continue;
+
+            uint8_t current = getBlockLightAt(nx, ny, nz);
+            if (propagatedLight > current) {
+                setBlockLightAt(nx, ny, nz, propagatedLight);
+                markLightChanged(nx, ny, nz);
+                addQueue.push({nx, ny, nz, node.sourceX, node.sourceY, node.sourceZ, node.radius, propagatedLight});
+            }
+        }
+    }
+
+    if (hasLightChanges) {
+        changedRegion.minY = 0;
+        changedRegion.maxY = CHUNK_SIZE_Y - 1;
+        scheduleChunkMeshRebuildRegion(changedRegion);
+    }
 }
 
 void rebuildSkyLightRegion(const LightRegion& rawRegion) {

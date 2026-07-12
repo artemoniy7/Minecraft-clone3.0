@@ -1452,31 +1452,38 @@ std::shared_ptr<ChunkData> generateChunk(int cx, int cz) {
             columns[x][z] = {landHeight, biomeA, biomeB, water, biome};
         }
     
+    auto setColumnRange = [&](int x, int z, int fromY, int toY, int blockId) {
+        fromY = std::clamp(fromY, 0, CHUNK_SIZE_Y - 1);
+        toY = std::clamp(toY, 0, CHUNK_SIZE_Y - 1);
+        if (fromY > toY) return;
+        const int base = x * CHUNK_SIZE_Y * CHUNK_SIZE_Z + z;
+        for (int y = fromY; y <= toY; ++y) {
+            data->blocks[base + y * CHUNK_SIZE_Z] = blockId;
+        }
+    };
+
     for (int x = 0; x < CHUNK_SIZE_X; ++x)
         for (int z = 0; z < CHUNK_SIZE_Z; ++z) {
             const auto& col = columns[x][z];
-            int surfaceY = (int)col.height, waterSurfaceY = (int)col.waterLevel, biome = col.biome;
-            for (int y = 0; y < CHUNK_SIZE_Y; ++y) {
-                int blockId = 0;
-                if (biome == BIOME_RIVER || biome == BIOME_OCEAN || biome == BIOME_DEEP_OCEAN) {
-                    if (y == surfaceY) blockId = (biome == BIOME_DEEP_OCEAN) ? 3 : 4;
-                    else if (y > surfaceY && y <= waterSurfaceY) blockId = 5;
-                    else if (y < surfaceY) blockId = (y > surfaceY - 4) ? 4 : 3;
-                } else if (biome == BIOME_BEACH) {
-                    if (y == surfaceY) blockId = 4;
-                    else if (y < surfaceY) blockId = (y > surfaceY - 3) ? 4 : 3;
-                } else {
-                    if (y == surfaceY) {
-                        if (biome == BIOME_MOUNTAINS || biome == BIOME_STONY_PEAKS) blockId = 3;
-                        else if (biome == BIOME_DESERT) blockId = 4;
-                        else blockId = 1;
-                    } else if (y > surfaceY - 4 && y < surfaceY) {
-                        if (biome == BIOME_MOUNTAINS || biome == BIOME_STONY_PEAKS) blockId = 3;
-                        else if (biome == BIOME_DESERT) blockId = 4;
-                        else blockId = 2;
-                    } else if (y < surfaceY - 4) blockId = 3;
-                }
-                data->blocks[(x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z] = blockId;
+            const int surfaceY = static_cast<int>(col.height);
+            const int waterSurfaceY = static_cast<int>(col.waterLevel);
+            const int biome = col.biome;
+            const int surfaceIdx = (x * CHUNK_SIZE_Y + surfaceY) * CHUNK_SIZE_Z + z;
+
+            if (biome == BIOME_RIVER || biome == BIOME_OCEAN || biome == BIOME_DEEP_OCEAN) {
+                setColumnRange(x, z, 0, surfaceY - 4, 3);
+                setColumnRange(x, z, surfaceY - 3, surfaceY - 1, 4);
+                data->blocks[surfaceIdx] = (biome == BIOME_DEEP_OCEAN) ? 3 : 4;
+                setColumnRange(x, z, surfaceY + 1, waterSurfaceY, 5);
+            } else if (biome == BIOME_BEACH) {
+                setColumnRange(x, z, 0, surfaceY - 3, 3);
+                setColumnRange(x, z, surfaceY - 2, surfaceY, 4);
+            } else {
+                const bool rocky = (biome == BIOME_MOUNTAINS || biome == BIOME_STONY_PEAKS);
+                const bool desert = (biome == BIOME_DESERT);
+                setColumnRange(x, z, 0, surfaceY - 5, 3);
+                setColumnRange(x, z, surfaceY - 3, surfaceY - 1, rocky ? 3 : (desert ? 4 : 2));
+                data->blocks[surfaceIdx] = rocky ? 3 : (desert ? 4 : 1);
             }
         }
     
@@ -1777,10 +1784,22 @@ constexpr int LANGUAGE_BUTTON_COUNT = 1;
 constexpr int OPTIONS_ROW1_BUTTON_COUNT = 4;
 constexpr int OPTIONS_ROW2_BUTTON_COUNT = 5;
 struct Button {
-    float relX, relY, relW, relH;
-    float absX, absY, absW, absH;
-    bool clicked;
-    const char* label;
+    float relX = 0.0f, relY = 0.0f, relW = 0.0f, relH = 0.0f;
+    float absX = 0.0f, absY = 0.0f, absW = 0.0f, absH = 0.0f;
+    bool clicked = false;
+    const char* label = "";
+
+    void updateAbsolute(int screenW, int screenH) {
+        absW = relW * screenW;
+        absH = relH * screenH;
+        absX = relX * screenW - absW * 0.5f;
+        absY = relY * screenH - absH * 0.5f;
+    }
+
+    void setAbsolute(float x, float y, float w, float h, const char* text = nullptr) {
+        absX = x; absY = y; absW = w; absH = h;
+        if (text) label = text;
+    }
 };
 
 enum class UILanguage {
@@ -2682,33 +2701,11 @@ void loadHUDTextures() {
 }
 
 void updateButtonPositions(int screenW, int screenH) {
-    for (int i=0; i<MAIN_MENU_BUTTON_COUNT; ++i) {
-        buttons[i].absW = buttons[i].relW * screenW;
-        buttons[i].absH = buttons[i].relH * screenH;
-        buttons[i].absX = buttons[i].relX * screenW - buttons[i].absW/2;
-        buttons[i].absY = buttons[i].relY * screenH - buttons[i].absH/2;
-    }
-    for (int i=0; i<WORLD_SELECT_BUTTON_COUNT; ++i) {
-        worldButtons[i].absW = worldButtons[i].relW * screenW;
-        worldButtons[i].absH = worldButtons[i].relH * screenH;
-        worldButtons[i].absX = worldButtons[i].relX * screenW - worldButtons[i].absW/2;
-        worldButtons[i].absY = worldButtons[i].relY * screenH - worldButtons[i].absH/2;
-    }
-    for (int i=0; i<LANGUAGE_BUTTON_COUNT; ++i) {
-        languageButtons[i].absW = languageButtons[i].relW * screenW;
-        languageButtons[i].absH = languageButtons[i].relH * screenH;
-        languageButtons[i].absX = languageButtons[i].relX * screenW - languageButtons[i].absW/2;
-        languageButtons[i].absY = languageButtons[i].relY * screenH - languageButtons[i].absH/2;
-    }
-    pauseResumeButton.absW = pauseResumeButton.relW * screenW;
-    pauseResumeButton.absH = pauseResumeButton.relH * screenH;
-    pauseResumeButton.absX = pauseResumeButton.relX * screenW - pauseResumeButton.absW/2;
-    pauseResumeButton.absY = pauseResumeButton.relY * screenH - pauseResumeButton.absH/2;
-
-    pauseExitButton.absW = pauseExitButton.relW * screenW;
-    pauseExitButton.absH = pauseExitButton.relH * screenH;
-    pauseExitButton.absX = pauseExitButton.relX * screenW - pauseExitButton.absW/2;
-    pauseExitButton.absY = pauseExitButton.relY * screenH - pauseExitButton.absH/2;
+    for (auto& btn : buttons) btn.updateAbsolute(screenW, screenH);
+    for (auto& btn : worldButtons) btn.updateAbsolute(screenW, screenH);
+    for (auto& btn : languageButtons) btn.updateAbsolute(screenW, screenH);
+    pauseResumeButton.updateAbsolute(screenW, screenH);
+    pauseExitButton.updateAbsolute(screenW, screenH);
 }
 
 void updatePhotoPosition(int screenW, int screenH) {
@@ -3804,7 +3801,7 @@ struct Chunk {
         if (grassOverlayVAO) { glDeleteVertexArrays(1, &grassOverlayVAO); grassOverlayVAO = 0; }
         if (grassOverlayVBO) { glDeleteBuffers(1, &grassOverlayVBO); grassOverlayVBO = 0; }
         grassOverlayVertexCount = 0;
-        std::unordered_map<int, std::vector<float>> verticesPerType;
+        std::array<std::vector<float>, 256> verticesPerType;
         std::vector<float> grassOverlayVertices;
         const float leftFace[] = { -0.5f,-0.5f,-0.5f, -0.5f,-0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,-0.5f, -0.5f,-0.5f,-0.5f };
         const float rightFace[] = { 0.5f,-0.5f,0.5f, 0.5f,-0.5f,-0.5f, 0.5f,0.5f,-0.5f, 0.5f,0.5f,-0.5f, 0.5f,0.5f,0.5f, 0.5f,-0.5f,0.5f };
@@ -3824,7 +3821,8 @@ struct Chunk {
         }};
     
         for (int x=0; x<CHUNK_SIZE_X; ++x) for (int y=0; y<CHUNK_SIZE_Y; ++y) for (int z=0; z<CHUNK_SIZE_Z; ++z) {
-            int type = getLocalBlock(x,y,z); if (type==0) continue;
+            const int localIdx = (x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z;
+            int type = data->blocks[localIdx]; if (type==0) continue;
             float ox = pos.x*CHUNK_SIZE_X + x, oy = y, oz = pos.y*CHUNK_SIZE_Z + z;
             
             // Получаем количество частей текстуры для этого типа блока
@@ -3958,7 +3956,8 @@ struct Chunk {
             neighbor=getBlockAtForMesh(ox,oy+1,oz); if(shouldRenderFace(neighbor)) addFace(topFace,3,verts);
             neighbor=getBlockAtForMesh(ox,oy-1,oz); if(shouldRenderFace(neighbor)) addFace(bottomFace,2,verts);
         }
-        for (auto& [type, verts] : verticesPerType) {
+        for (int type = 1; type < 256; ++type) {
+            auto& verts = verticesPerType[type];
             if (verts.empty()) continue;
             glGenVertexArrays(1, &vao[type]); glGenBuffers(1, &vbo[type]);
             glBindVertexArray(vao[type]); glBindBuffer(GL_ARRAY_BUFFER, vbo[type]);
@@ -5679,10 +5678,7 @@ void renderDeleteWorldConfirmMenu(int screenW, int screenH) {
                               glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
 
     for (int i = 0; i < DELETE_CONFIRM_BUTTON_COUNT; ++i) {
-        deleteConfirmButtons[i].absW = deleteConfirmButtons[i].relW * screenW;
-        deleteConfirmButtons[i].absH = deleteConfirmButtons[i].relH * screenH;
-        deleteConfirmButtons[i].absX = deleteConfirmButtons[i].relX * screenW - deleteConfirmButtons[i].absW / 2.0f;
-        deleteConfirmButtons[i].absY = deleteConfirmButtons[i].relY * screenH - deleteConfirmButtons[i].absH / 2.0f;
+        deleteConfirmButtons[i].updateAbsolute(screenW, screenH);
 
         const bool hovered = isMouseOverButton(deleteConfirmButtons[i], mouseX, mouseY);
         unsigned int tex = (hovered && menuButtonHighlightTexture) ? menuButtonHighlightTexture : menuButtonTexture;
@@ -5843,43 +5839,25 @@ void updateOptionsLayout(int screenW, int screenH) {
 
     // Difficulty справа от FOV
     optionsDifficultyButton.label = tr("Difficulty: Hard", "Сложность: Сложно", "難易度: ハード");
-    optionsDifficultyButton.absW = buttonW;
-    optionsDifficultyButton.absH = buttonH;
-    optionsDifficultyButton.absX = rightX;
-    optionsDifficultyButton.absY = topY - buttonH * 0.5f + yOffset;
+    optionsDifficultyButton.setAbsolute(rightX, topY - buttonH * 0.5f + yOffset, buttonW, buttonH);
 
     // Структура как на скриншоте
     // Одиночная кнопка справа под Difficulty
-    optionsRow2Buttons[4].label = "Super Secret Settings...";
-    optionsRow2Buttons[4].absX = rightX;
-    optionsRow2Buttons[4].absY = optionsDifficultyButton.absY + buttonH + rowGap;
-    optionsRow2Buttons[4].absW = buttonW;
-    optionsRow2Buttons[4].absH = buttonH;
+    optionsRow2Buttons[4].setAbsolute(rightX, optionsDifficultyButton.absY + buttonH + rowGap, buttonW, buttonH, "Super Secret Settings...");
 
     // Две колонки ниже
     const float startRowsY = optionsRow2Buttons[4].absY + buttonH + rowGap;
     const char* leftLabels[4] = { "Music & Sounds...", "Video Settings...", "Language...", "Resource Packs..." };
     const char* rightLabels[4] = { "Broadcast Settings...", "Controls...", "Multiplayer Settings...", "Snooper Settings..." };
     for (int i = 0; i < 4; ++i) {
-        optionsRow1Buttons[i].absW = buttonW;
-        optionsRow1Buttons[i].absH = buttonH;
-        optionsRow2Buttons[i].absW = buttonW;
-        optionsRow2Buttons[i].absH = buttonH;
-
-        optionsRow1Buttons[i].absX = leftX;
-        optionsRow1Buttons[i].absY = startRowsY + i * (buttonH + rowGap * 0.55f);
-        optionsRow1Buttons[i].label = leftLabels[i];
-
-        optionsRow2Buttons[i].absX = rightX;
-        optionsRow2Buttons[i].absY = startRowsY + i * (buttonH + rowGap * 0.55f);
-        optionsRow2Buttons[i].label = rightLabels[i];
+        const float rowY = startRowsY + i * (buttonH + rowGap * 0.55f);
+        optionsRow1Buttons[i].setAbsolute(leftX, rowY, buttonW, buttonH, leftLabels[i]);
+        optionsRow2Buttons[i].setAbsolute(rightX, rowY, buttonW, buttonH, rightLabels[i]);
     }
 
-    optionsDoneButton.label = tr("Done", "Готово", "完了");
-    optionsDoneButton.absW = 560.0f * OPTIONS_UI_SCALE;
-    optionsDoneButton.absH = 50.0f * OPTIONS_UI_SCALE;
-    optionsDoneButton.absX = (screenW - optionsDoneButton.absW) * 0.5f;
-    optionsDoneButton.absY = optionsRow1Buttons[3].absY + buttonH + 46.0f * OPTIONS_UI_SCALE;
+    const float doneW = 560.0f * OPTIONS_UI_SCALE;
+    const float doneH = 50.0f * OPTIONS_UI_SCALE;
+    optionsDoneButton.setAbsolute((screenW - doneW) * 0.5f, optionsRow1Buttons[3].absY + buttonH + 46.0f * OPTIONS_UI_SCALE, doneW, doneH, tr("Done", "Готово", "完了"));
 }
 
 void handleWorldSelectMenuClick(GLFWwindow* window, int button) {

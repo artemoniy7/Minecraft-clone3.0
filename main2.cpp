@@ -6719,11 +6719,12 @@ out vec4 FragColor;
 
 void main() {
     vec2 centered = gl_PointCoord - vec2(0.5);
-    float dist = length(centered);
+    vec2 stretched = vec2(centered.x * 0.80, centered.y * 1.80);
+    float dist = length(stretched);
     if (dist > 0.5 || u_alpha <= 0.002) discard;
 
-    float core = 1.0 - smoothstep(0.00, 0.18, dist);
-    float halo = 1.0 - smoothstep(0.10, 0.50, dist);
+    float core = 1.0 - smoothstep(0.00, 0.16, dist);
+    float halo = 1.0 - smoothstep(0.08, 0.50, dist);
     float alpha = u_alpha * (core * 0.28 + halo * 0.72);
     FragColor = vec4(u_glowColor, alpha);
 }
@@ -6961,7 +6962,7 @@ void renderSkyHorizonGlow(const glm::vec3& sunDir, const glm::mat4& view, const 
     glUniform3fv(glGetUniformLocation(skyGlowProgram, "u_cameraPos"), 1, glm::value_ptr(renderCameraPos));
     glUniform3fv(glGetUniformLocation(skyGlowProgram, "u_glowColor"), 1, glm::value_ptr(glowColor));
     glUniform1f(glGetUniformLocation(skyGlowProgram, "u_alpha"), alpha);
-    glUniform1f(glGetUniformLocation(skyGlowProgram, "u_pointSize"), 520.0f);
+    glUniform1f(glGetUniformLocation(skyGlowProgram, "u_pointSize"), 1100.0f);
 
     glBindVertexArray(skyGlowVAO);
     glBindBuffer(GL_ARRAY_BUFFER, skyGlowVBO);
@@ -7579,8 +7580,9 @@ void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb
     // Vertical east/west sky arc: no constant Z offset, so the sun and moon pass
     // directly over the world instead of sliding along the side of the sky.
     sunDir = glm::normalize(glm::vec3(cos(angle), sin(angle), 0.0f));
-    float daylight = glm::clamp(sunDir.y * 1.15f + 0.15f, 0.0f, 1.0f);
-    daylight = daylight * daylight * (3.0f - 2.0f*daylight);
+    // Keep daylight strong until the sun is actually near/below the horizon;
+    // otherwise sunset gets dark while the sun is still visibly above ground.
+    float daylight = glm::smoothstep(-0.18f, 0.22f, sunDir.y);
     sunInt = 0.05f + daylight * 0.95f;
     amb = 0.02f + daylight * 0.36f;
 

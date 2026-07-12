@@ -4398,10 +4398,17 @@ void setBlockAt(int wx, int wy, int wz, int type) {
         }
     }
 
-    // Глобальное обновление света планирует фоновую пересборку чанков со сменившимся светом.
-    // Для светящихся блоков используем быстрый инкрементальный путь, чтобы установка/ломание
-    // не запускали полный пересчёт региона и не подвешивали игру.
-    onBlockChangedGlobal(wx, wy, wz, skyLightRelevant && !lightEmitterChanged, blockLightRelevant && !lightEmitterChanged);
+    // Не запускаем полный rebuildSkyLightRegion из пути клика: он обходит большую область
+    // по всей высоте мира и именно на обычных блоках даёт заметный фриз. Для смены
+    // непрозрачности достаточно дешёвого вертикального обновления ближайших колонок.
+    if (!lightEmitterChanged && skyLightRelevant) {
+        updateSkyLightColumnsAround(wx, wz);
+    }
+
+    // Полную перестройку блочного света оставляем только когда рядом реально был
+    // распространяющийся блочный свет. В обычном случае это false, поэтому постановка
+    // камня/земли/досок больше не запускает тяжёлый пересчёт освещения региона.
+    onBlockChangedGlobal(wx, wy, wz, false, blockLightRelevant && !lightEmitterChanged);
     rebuildChunkMeshesImmediatelyAround(cx, cz, lx, lz);
 }
 
@@ -4444,7 +4451,7 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
     const int integrateBudget = fastChunkLoadingMode ? 24 : 2;
     integratePendingChunkData(integrateBudget);
     processPendingBlockLightRebuilds(fastChunkLoadingMode ? 2 : 1);
-    processPendingLightMeshRebuilds(fastChunkLoadingMode ? 6 : 1);
+    processPendingLightMeshRebuilds(fastChunkLoadingMode ? 6 : 8);
 
     if (!loadedChunks.empty() && lastRequestedCenter.x == centerCX && lastRequestedCenter.y == centerCZ) {
         return;

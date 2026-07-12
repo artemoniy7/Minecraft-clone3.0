@@ -153,6 +153,7 @@ int getBlockAtForMesh(int wx, int wy, int wz);
 void integratePendingChunkData(int maxPerFrame);
 void buildChunkMeshesNearCamera(int maxPerFrame);
 void rebuildChunkMeshesImmediatelyAround(int cx, int cz, int lx, int lz);
+void processPendingLightMeshRebuilds(int maxPerFrame);
 void initReticle();
 void evaluateDayNightCycle(float t, glm::vec3& sunDir, float& sunInt, float& amb, glm::vec3& sky);
 void checkShaderErrors(unsigned int s, const std::string& t);
@@ -1138,7 +1139,7 @@ void addBlockLightInRegion(int x, int y, int z, uint8_t radius, const LightRegio
 
 void rebuildBlockLightRegion(const LightRegion& rawRegion);
 void rebuildSkyLightRegion(const LightRegion& rawRegion);
-void rebuildChunkMeshesInRegion(const LightRegion& rawRegion);
+void scheduleChunkMeshRebuildRegion(const LightRegion& rawRegion);
 
 // Обновление небесного света при изменении блока
 void updateSkyLightAt(int x, int y, int z) {
@@ -1153,8 +1154,10 @@ void updateSkyLightAt(int x, int y, int z) {
 }
 
 // Обработчик изменения блока - ТЕПЕРЬ ОБНОВЛЯЕТ И НЕБЕСНЫЙ СВЕТ ТОЖЕ
-void onBlockChangedGlobal(int x, int y, int z) {
-    updateSkyLightAt(x, y, z);
+void onBlockChangedGlobal(int x, int y, int z, bool updateSkyLight) {
+    if (updateSkyLight) {
+        updateSkyLightAt(x, y, z);
+    }
 
     LightRegion region;
     region.minX = x - maxBlockLightRadius;
@@ -1166,13 +1169,13 @@ void onBlockChangedGlobal(int x, int y, int z) {
     rebuildBlockLightRegion(region);
 
     LightRegion meshRegion;
-    meshRegion.minX = std::min(x - MAX_LIGHT, region.minX);
-    meshRegion.maxX = std::max(x + MAX_LIGHT, region.maxX);
+    meshRegion.minX = updateSkyLight ? std::min(x - MAX_LIGHT, region.minX) : region.minX;
+    meshRegion.maxX = updateSkyLight ? std::max(x + MAX_LIGHT, region.maxX) : region.maxX;
     meshRegion.minY = 0;
     meshRegion.maxY = CHUNK_SIZE_Y - 1;
-    meshRegion.minZ = std::min(z - MAX_LIGHT, region.minZ);
-    meshRegion.maxZ = std::max(z + MAX_LIGHT, region.maxZ);
-    rebuildChunkMeshesInRegion(meshRegion);
+    meshRegion.minZ = updateSkyLight ? std::min(z - MAX_LIGHT, region.minZ) : region.minZ;
+    meshRegion.maxZ = updateSkyLight ? std::max(z + MAX_LIGHT, region.maxZ) : region.maxZ;
+    scheduleChunkMeshRebuildRegion(meshRegion);
 }
 
 void rebuildBlockLightAroundChunk(int cx, int cz) {
@@ -1623,6 +1626,8 @@ static bool waterChunksCacheValid = false;
 static bool alphaChunksCacheValid = false;
 static std::queue<glm::ivec2> pendingBlockLightRebuildChunks;
 static std::unordered_set<glm::ivec2, hash_ivec2> queuedBlockLightRebuildChunks;
+static std::queue<glm::ivec2> pendingLightMeshRebuildChunks;
+static std::unordered_set<glm::ivec2, hash_ivec2> queuedLightMeshRebuildChunks;
 static Chunk* lastChunkForMesh = nullptr;
 static glm::ivec2 lastChunkCoordsForMesh(0,0);
 
@@ -2453,6 +2458,8 @@ void updateUILabels() {
 
     pauseResumeButton.label = tr("Resume", "Продолжить", "ゲームに戻る");
     pauseExitButton.label = tr("Exit to Menu", "Выйти в меню", "メニューへ戻る");
+    deleteConfirmButtons[0].label = tr("Delete", "Удалить", "削除");
+    deleteConfirmButtons[1].label = tr("Cancel", "Отмена", "キャンセル");
     languageButtons[0].label = tr("Done", "Готово", "完了");
 }
 
@@ -4241,15 +4248,28 @@ void setBlockAt(int wx, int wy, int wz, int type) {
     int cz = (wz>=0) ? wz/CHUNK_SIZE_Z : (wz-CHUNK_SIZE_Z+1)/CHUNK_SIZE_Z;
     auto it = loadedChunks.find({cx,cz}); if (it==loadedChunks.end()) return;
     int lx = wx - cx*CHUNK_SIZE_X, lz = wz - cz*CHUNK_SIZE_Z;
+    int oldType = it->second.getLocalBlock(lx, wy, lz);
+    const int oldOpacity = getLightOpacity(oldType);
+    const int newOpacity = getLightOpacity(type);
+    bool skyLightRelevant = oldOpacity != newOpacity && (
+        getSkyLightAt(wx, wy, wz) > 0 ||
+        getSkyLightAt(wx + 1, wy, wz) > 0 || getSkyLightAt(wx - 1, wy, wz) > 0 ||
+        getSkyLightAt(wx, wy + 1, wz) > 0 || getSkyLightAt(wx, wy - 1, wz) > 0 ||
+        getSkyLightAt(wx, wy, wz + 1) > 0 || getSkyLightAt(wx, wy, wz - 1) > 0
+    );
     it->second.setLocalBlock(lx,wy,lz,type);
+    if (!skyLightRelevant && oldOpacity != newOpacity) {
+        skyLightRelevant = getSkyLightAt(wx, wy + 1, wz) > 0;
+    }
     if (lx==0) { auto n=loadedChunks.find({cx-1,cz}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
     if (lx==CHUNK_SIZE_X-1) { auto n=loadedChunks.find({cx+1,cz}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
     if (lz==0) { auto n=loadedChunks.find({cx,cz-1}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
     if (lz==CHUNK_SIZE_Z-1) { auto n=loadedChunks.find({cx,cz+1}); if(n!=loadedChunks.end()) n->second.meshReady=false; }
     waterChunksCacheValid = false;
 
-    // Глобальное обновление света пересобирает все чанки, где изменились значения света.
-    onBlockChangedGlobal(wx, wy, wz);
+    // Глобальное обновление света планирует фоновую пересборку чанков со сменившимся светом.
+    onBlockChangedGlobal(wx, wy, wz, skyLightRelevant);
+    rebuildChunkMeshesImmediatelyAround(cx, cz, lx, lz);
 }
 
 void integratePendingChunkData(int maxPerFrame) {
@@ -4291,6 +4311,7 @@ void updateChunksAroundCamera(const glm::vec3& cameraPos, bool loadFromFile) {
     const int integrateBudget = fastChunkLoadingMode ? 24 : 2;
     integratePendingChunkData(integrateBudget);
     processPendingBlockLightRebuilds(fastChunkLoadingMode ? 2 : 1);
+    processPendingLightMeshRebuilds(fastChunkLoadingMode ? 6 : 1);
 
     if (!loadedChunks.empty() && lastRequestedCenter.x == centerCX && lastRequestedCenter.y == centerCZ) {
         return;
@@ -4372,7 +4393,7 @@ void rebuildChunkMeshesImmediatelyAround(int cx, int cz, int lx, int lz) {
     }
 }
 
-void rebuildChunkMeshesInRegion(const LightRegion& rawRegion) {
+void scheduleChunkMeshRebuildRegion(const LightRegion& rawRegion) {
     auto floorDiv = [](int value, int divisor) {
         return (value >= 0) ? value / divisor : (value - divisor + 1) / divisor;
     };
@@ -4384,10 +4405,25 @@ void rebuildChunkMeshesInRegion(const LightRegion& rawRegion) {
 
     for (int cx = minCX; cx <= maxCX; ++cx) {
         for (int cz = minCZ; cz <= maxCZ; ++cz) {
-            auto it = loadedChunks.find({cx, cz});
-            if (it == loadedChunks.end() || !it->second.data) continue;
-            it->second.buildMesh();
+            glm::ivec2 chunkPos(cx, cz);
+            if (queuedLightMeshRebuildChunks.insert(chunkPos).second) {
+                pendingLightMeshRebuildChunks.push(chunkPos);
+            }
         }
+    }
+}
+
+void processPendingLightMeshRebuilds(int maxPerFrame) {
+    int processed = 0;
+    while (processed < maxPerFrame && !pendingLightMeshRebuildChunks.empty()) {
+        glm::ivec2 chunkPos = pendingLightMeshRebuildChunks.front();
+        pendingLightMeshRebuildChunks.pop();
+        queuedLightMeshRebuildChunks.erase(chunkPos);
+
+        auto it = loadedChunks.find(chunkPos);
+        if (it == loadedChunks.end() || !it->second.data) continue;
+        it->second.buildMesh();
+        ++processed;
     }
 }
 
@@ -5012,6 +5048,8 @@ void exitToMenu(GLFWwindow* window, int& sw, int& sh) {
     loadedChunks.clear();
     waterChunksCache.clear();
     waterChunksCacheValid = false;
+    pendingLightMeshRebuildChunks = std::queue<glm::ivec2>();
+    queuedLightMeshRebuildChunks.clear();
     {
         std::lock_guard<std::mutex> lock(chunkMutex);
         pendingData.clear();
@@ -5406,7 +5444,9 @@ void renderDeleteWorldConfirmMenu(int screenW, int screenH) {
         drawTiledBackground(backgroundTexture, screenW, screenH);
     }
 
-    const char* question = "вы точно хотите удалить мир навсегда? (Очень-очень долго)";
+    const char* question = tr("Are you sure you want to delete this world forever?",
+                              "Вы точно хотите удалить этот мир навсегда?",
+                              "このワールドを完全に削除しますか？");
     drawMinecraftTextCentered(question, screenW * 0.5f, screenH * 0.30f, 2.0f, screenW, screenH,
                               glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
 

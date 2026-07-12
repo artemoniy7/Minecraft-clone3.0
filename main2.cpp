@@ -1452,31 +1452,38 @@ std::shared_ptr<ChunkData> generateChunk(int cx, int cz) {
             columns[x][z] = {landHeight, biomeA, biomeB, water, biome};
         }
     
+    auto setColumnRange = [&](int x, int z, int fromY, int toY, int blockId) {
+        fromY = std::clamp(fromY, 0, CHUNK_SIZE_Y - 1);
+        toY = std::clamp(toY, 0, CHUNK_SIZE_Y - 1);
+        if (fromY > toY) return;
+        const int base = x * CHUNK_SIZE_Y * CHUNK_SIZE_Z + z;
+        for (int y = fromY; y <= toY; ++y) {
+            data->blocks[base + y * CHUNK_SIZE_Z] = blockId;
+        }
+    };
+
     for (int x = 0; x < CHUNK_SIZE_X; ++x)
         for (int z = 0; z < CHUNK_SIZE_Z; ++z) {
             const auto& col = columns[x][z];
-            int surfaceY = (int)col.height, waterSurfaceY = (int)col.waterLevel, biome = col.biome;
-            for (int y = 0; y < CHUNK_SIZE_Y; ++y) {
-                int blockId = 0;
-                if (biome == BIOME_RIVER || biome == BIOME_OCEAN || biome == BIOME_DEEP_OCEAN) {
-                    if (y == surfaceY) blockId = (biome == BIOME_DEEP_OCEAN) ? 3 : 4;
-                    else if (y > surfaceY && y <= waterSurfaceY) blockId = 5;
-                    else if (y < surfaceY) blockId = (y > surfaceY - 4) ? 4 : 3;
-                } else if (biome == BIOME_BEACH) {
-                    if (y == surfaceY) blockId = 4;
-                    else if (y < surfaceY) blockId = (y > surfaceY - 3) ? 4 : 3;
-                } else {
-                    if (y == surfaceY) {
-                        if (biome == BIOME_MOUNTAINS || biome == BIOME_STONY_PEAKS) blockId = 3;
-                        else if (biome == BIOME_DESERT) blockId = 4;
-                        else blockId = 1;
-                    } else if (y > surfaceY - 4 && y < surfaceY) {
-                        if (biome == BIOME_MOUNTAINS || biome == BIOME_STONY_PEAKS) blockId = 3;
-                        else if (biome == BIOME_DESERT) blockId = 4;
-                        else blockId = 2;
-                    } else if (y < surfaceY - 4) blockId = 3;
-                }
-                data->blocks[(x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z] = blockId;
+            const int surfaceY = static_cast<int>(col.height);
+            const int waterSurfaceY = static_cast<int>(col.waterLevel);
+            const int biome = col.biome;
+            const int surfaceIdx = (x * CHUNK_SIZE_Y + surfaceY) * CHUNK_SIZE_Z + z;
+
+            if (biome == BIOME_RIVER || biome == BIOME_OCEAN || biome == BIOME_DEEP_OCEAN) {
+                setColumnRange(x, z, 0, surfaceY - 4, 3);
+                setColumnRange(x, z, surfaceY - 3, surfaceY - 1, 4);
+                data->blocks[surfaceIdx] = (biome == BIOME_DEEP_OCEAN) ? 3 : 4;
+                setColumnRange(x, z, surfaceY + 1, waterSurfaceY, 5);
+            } else if (biome == BIOME_BEACH) {
+                setColumnRange(x, z, 0, surfaceY - 3, 3);
+                setColumnRange(x, z, surfaceY - 2, surfaceY, 4);
+            } else {
+                const bool rocky = (biome == BIOME_MOUNTAINS || biome == BIOME_STONY_PEAKS);
+                const bool desert = (biome == BIOME_DESERT);
+                setColumnRange(x, z, 0, surfaceY - 5, 3);
+                setColumnRange(x, z, surfaceY - 3, surfaceY - 1, rocky ? 3 : (desert ? 4 : 2));
+                data->blocks[surfaceIdx] = rocky ? 3 : (desert ? 4 : 1);
             }
         }
     
@@ -3794,7 +3801,7 @@ struct Chunk {
         if (grassOverlayVAO) { glDeleteVertexArrays(1, &grassOverlayVAO); grassOverlayVAO = 0; }
         if (grassOverlayVBO) { glDeleteBuffers(1, &grassOverlayVBO); grassOverlayVBO = 0; }
         grassOverlayVertexCount = 0;
-        std::unordered_map<int, std::vector<float>> verticesPerType;
+        std::array<std::vector<float>, 256> verticesPerType;
         std::vector<float> grassOverlayVertices;
         const float leftFace[] = { -0.5f,-0.5f,-0.5f, -0.5f,-0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,0.5f, -0.5f,0.5f,-0.5f, -0.5f,-0.5f,-0.5f };
         const float rightFace[] = { 0.5f,-0.5f,0.5f, 0.5f,-0.5f,-0.5f, 0.5f,0.5f,-0.5f, 0.5f,0.5f,-0.5f, 0.5f,0.5f,0.5f, 0.5f,-0.5f,0.5f };
@@ -3814,7 +3821,8 @@ struct Chunk {
         }};
     
         for (int x=0; x<CHUNK_SIZE_X; ++x) for (int y=0; y<CHUNK_SIZE_Y; ++y) for (int z=0; z<CHUNK_SIZE_Z; ++z) {
-            int type = getLocalBlock(x,y,z); if (type==0) continue;
+            const int localIdx = (x * CHUNK_SIZE_Y + y) * CHUNK_SIZE_Z + z;
+            int type = data->blocks[localIdx]; if (type==0) continue;
             float ox = pos.x*CHUNK_SIZE_X + x, oy = y, oz = pos.y*CHUNK_SIZE_Z + z;
             
             // Получаем количество частей текстуры для этого типа блока
@@ -3948,7 +3956,8 @@ struct Chunk {
             neighbor=getBlockAtForMesh(ox,oy+1,oz); if(shouldRenderFace(neighbor)) addFace(topFace,3,verts);
             neighbor=getBlockAtForMesh(ox,oy-1,oz); if(shouldRenderFace(neighbor)) addFace(bottomFace,2,verts);
         }
-        for (auto& [type, verts] : verticesPerType) {
+        for (int type = 1; type < 256; ++type) {
+            auto& verts = verticesPerType[type];
             if (verts.empty()) continue;
             glGenVertexArrays(1, &vao[type]); glGenBuffers(1, &vbo[type]);
             glBindVertexArray(vao[type]); glBindBuffer(GL_ARRAY_BUFFER, vbo[type]);

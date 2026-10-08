@@ -1,42 +1,3 @@
-    // Разрешаем оси через двоичный поиск вместо большого шага + линейного отката.
-    // Так граница контакта не зависит от величины delta и не вызывает микрорывки камеры.
-    auto resolveAxis = [&](int axis, float oldValue, float deltaValue) -> float {
-        if (std::abs(deltaValue) < 1e-6f) return oldValue;
-
-        glm::vec3 candidate = newFeetPos;
-        if (axis == 0) candidate.x = oldValue + deltaValue;
-        else candidate.z = oldValue + deltaValue;
-
-        if (!checkPlayerCollision(candidate)) return oldValue + deltaValue;
-
-        const float direction = (deltaValue > 0.0f) ? 1.0f : -1.0f;
-        float lo = 0.0f;
-        float hi = std::abs(deltaValue);
-
-        // Ищем последнюю безопасную точку. 16 итераций дают точность
-        // значительно лучше прежнего COLLISION_STEP=0.01.
-        for (int i = 0; i < 16; ++i) {
-            const float mid = (lo + hi) * 0.5f;
-            candidate = newFeetPos;
-            if (axis == 0) candidate.x = oldValue + direction * mid;
-            else candidate.z = oldValue + direction * mid;
-
-            if (checkPlayerCollision(candidate)) hi = mid;
-            else lo = mid;
-        }
-
-        // checkPlayerCollision использует <=, поэтому оставляем микрозазор,
-        // чтобы следующий кадр не считал контакт повторным проникновением.
-        constexpr float CONTACT_EPSILON = 0.0005f;
-        return oldValue + direction * std::max(0.0f, lo - CONTACT_EPSILON);
-    };
-
-    newFeetPos.x = resolveAxis(0, oldFeetPos.x, delta.x);
-    actualDelta.x = newFeetPos.x - oldFeetPos.x;
-
-    newFeetPos.z = resolveAxis(1, oldFeetPos.z, delta.z);
-    actualDelta.z = newFeetPos.z - oldFeetPos.z;
-    
 // Физика игрока, проверки земли и разрешение коллизий.
 // Этот файл подключается из main2.cpp и рассчитан на сборку в одном translation unit.
 
@@ -88,48 +49,63 @@ bool isOnGroundCheck(const glm::vec3& feetPos) {
 glm::vec3 applyCollision(const glm::vec3& oldFeetPos, const glm::vec3& delta) {
     glm::vec3 newFeetPos = oldFeetPos;
     glm::vec3 actualDelta(0.0f);
-    constexpr float COLLISION_STEP = 0.01f;
     
+    // Разрешаем горизонтальные оси через двоичный поиск.
+    // В отличие от фиксированного шага 0.01, результат не зависит от величины delta.
+    auto resolveHorizontalAxis = [&](int axis, float oldValue, float deltaValue) -> float {
+        if (std::abs(deltaValue) < 1e-6f) {
+            return oldValue;
+        }
+
+        glm::vec3 candidate = newFeetPos;
+        if (axis == 0) {
+            candidate.x = oldValue + deltaValue;
+        } else {
+            candidate.z = oldValue + deltaValue;
+        }
+
+        if (!checkPlayerCollision(candidate)) {
+            return oldValue + deltaValue;
+        }
+
+        const float direction = (deltaValue > 0.0f) ? 1.0f : -1.0f;
+        float lo = 0.0f;
+        float hi = std::abs(deltaValue);
+
+        for (int i = 0; i < 16; ++i) {
+            const float mid = (lo + hi) * 0.5f;
+            candidate = newFeetPos;
+            if (axis == 0) {
+                candidate.x = oldValue + direction * mid;
+            } else {
+                candidate.z = oldValue + direction * mid;
+            }
+
+            if (checkPlayerCollision(candidate)) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+
+        constexpr float CONTACT_EPSILON = 0.0005f;
+        return oldValue + direction * std::max(0.0f, lo - CONTACT_EPSILON);
+    };
+
     // Обработка X
-    newFeetPos.x += delta.x;
-    if (checkPlayerCollision(newFeetPos)) {
-        newFeetPos.x = oldFeetPos.x;
-        const float direction = (delta.x > 0.0f) ? 1.0f : -1.0f;
-        for (float t = COLLISION_STEP; t <= std::abs(delta.x); t += COLLISION_STEP) {
-            newFeetPos.x = oldFeetPos.x + direction * t;
-            if (checkPlayerCollision(newFeetPos)) {
-                newFeetPos.x -= direction * COLLISION_STEP;
-                break;
-            }
-        }
-    }
+    newFeetPos.x = resolveHorizontalAxis(0, oldFeetPos.x, delta.x);
     actualDelta.x = newFeetPos.x - oldFeetPos.x;
-    
+
     // Обработка Z
-    newFeetPos.z += delta.z;
-    if (checkPlayerCollision(newFeetPos)) {
-        newFeetPos.z = oldFeetPos.z;
-        const float direction = (delta.z > 0.0f) ? 1.0f : -1.0f;
-        for (float t = COLLISION_STEP; t <= std::abs(delta.z); t += COLLISION_STEP) {
-            newFeetPos.z = oldFeetPos.z + direction * t;
-            if (checkPlayerCollision(newFeetPos)) {
-                newFeetPos.z -= direction * COLLISION_STEP;
-                break;
-            }
-        }
-    }
+    newFeetPos.z = resolveHorizontalAxis(1, oldFeetPos.z, delta.z);
     actualDelta.z = newFeetPos.z - oldFeetPos.z;
     
-    // Проверяем, были ли мы в воздухе до обработки Y
     bool wasFalling = playerVelocity.y < 0.0f && !wasOnGround;
-    
-    // Проверяем, находимся ли мы в воде (по голове или ногам)
     bool inWater = isPlayerInWater();
     
     // Обработка Y
     newFeetPos.y += delta.y;
     if (checkPlayerCollision(newFeetPos)) {
-        // Урон от падения — ТОЛЬКО если не в воде
         if (wasFalling && fallDistance > MIN_FALL_DAMAGE_HEIGHT && !inWater) {
             float damage = calculateFallDamage(fallDistance);
             if (damage > 0) {
@@ -137,47 +113,43 @@ glm::vec3 applyCollision(const glm::vec3& oldFeetPos, const glm::vec3& delta) {
             }
         }
         
-        // Обнуляем вертикальную скорость при столкновении
-        if (delta.y > 0.0f) playerVelocity.y = 0.0f;
-        else if (delta.y < 0.0f) playerVelocity.y = 0.0f;
-        
-        // Сброс расстояния падения при приземлении
+        playerVelocity.y = 0.0f;
         fallDistance = 0.0f;
         
-        // Точное размещение на поверхности через двоичный поиск.
-        // Это устраняет заметное "пиление" камеры по Y при приземлении.
+        // Ищем точную последнюю безопасную позицию вместо серии
+        // дискретных откатов по 0.01, которые и давали дрожание камеры.
         newFeetPos.y = oldFeetPos.y;
         const float direction = (delta.y > 0.0f) ? 1.0f : -1.0f;
         float lo = 0.0f;
         float hi = std::abs(delta.y);
+
         for (int i = 0; i < 16; ++i) {
             const float mid = (lo + hi) * 0.5f;
             newFeetPos.y = oldFeetPos.y + direction * mid;
-            if (checkPlayerCollision(newFeetPos)) hi = mid;
-            else lo = mid;
+            if (checkPlayerCollision(newFeetPos)) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
         }
+
         constexpr float CONTACT_EPSILON = 0.0005f;
         newFeetPos.y = oldFeetPos.y +
             direction * std::max(0.0f, lo - CONTACT_EPSILON);
     }
     actualDelta.y = newFeetPos.y - oldFeetPos.y;
     
-    // Обновление состояния "на земле"
     bool wasOnGroundPrevious = wasOnGround;
     isOnGround = isOnGroundCheck(newFeetPos);
     
-    // Отслеживание дистанции падения
     if (!isOnGround && wasOnGroundPrevious) {
-        // Начало падения
         lastGroundY = newFeetPos.y;
         fallDistance = 0.0f;
     } else if (!isOnGround && !wasOnGroundPrevious) {
-        // В воздухе - обновляем дистанцию падения (но не в воде)
         if (!inWater) {
             fallDistance = lastGroundY - newFeetPos.y;
         }
     } else if (isOnGround) {
-        // На земле - сбрасываем
         fallDistance = 0.0f;
         lastGroundY = newFeetPos.y;
     }
@@ -198,8 +170,8 @@ void placePlayerOnGround() {
     cameraPos = feetPos + glm::vec3(0.0f, EYE_HEIGHT, 0.0f);
     playerVelocity = glm::vec3(0.0f);
     isOnGround = true;
-    wasOnGround = true; // ДОБАВЬТЕ ЭТУ СТРОКУ
-    fallDistance = 0.0f; // ДОБАВЬТЕ ЭТУ СТРОКУ
-    lastGroundY = feetPos.y; // ДОБАВЬТЕ ЭТУ СТРОКУ
+    wasOnGround = true;
+    fallDistance = 0.0f;
+    lastGroundY = feetPos.y;
 }
 

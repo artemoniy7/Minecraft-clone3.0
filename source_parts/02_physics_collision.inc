@@ -1,3 +1,42 @@
+    // Разрешаем оси через двоичный поиск вместо большого шага + линейного отката.
+    // Так граница контакта не зависит от величины delta и не вызывает микрорывки камеры.
+    auto resolveAxis = [&](int axis, float oldValue, float deltaValue) -> float {
+        if (std::abs(deltaValue) < 1e-6f) return oldValue;
+
+        glm::vec3 candidate = newFeetPos;
+        if (axis == 0) candidate.x = oldValue + deltaValue;
+        else candidate.z = oldValue + deltaValue;
+
+        if (!checkPlayerCollision(candidate)) return oldValue + deltaValue;
+
+        const float direction = (deltaValue > 0.0f) ? 1.0f : -1.0f;
+        float lo = 0.0f;
+        float hi = std::abs(deltaValue);
+
+        // Ищем последнюю безопасную точку. 16 итераций дают точность
+        // значительно лучше прежнего COLLISION_STEP=0.01.
+        for (int i = 0; i < 16; ++i) {
+            const float mid = (lo + hi) * 0.5f;
+            candidate = newFeetPos;
+            if (axis == 0) candidate.x = oldValue + direction * mid;
+            else candidate.z = oldValue + direction * mid;
+
+            if (checkPlayerCollision(candidate)) hi = mid;
+            else lo = mid;
+        }
+
+        // checkPlayerCollision использует <=, поэтому оставляем микрозазор,
+        // чтобы следующий кадр не считал контакт повторным проникновением.
+        constexpr float CONTACT_EPSILON = 0.0005f;
+        return oldValue + direction * std::max(0.0f, lo - CONTACT_EPSILON);
+    };
+
+    newFeetPos.x = resolveAxis(0, oldFeetPos.x, delta.x);
+    actualDelta.x = newFeetPos.x - oldFeetPos.x;
+
+    newFeetPos.z = resolveAxis(1, oldFeetPos.z, delta.z);
+    actualDelta.z = newFeetPos.z - oldFeetPos.z;
+    
 // Физика игрока, проверки земли и разрешение коллизий.
 // Этот файл подключается из main2.cpp и рассчитан на сборку в одном translation unit.
 
@@ -105,16 +144,21 @@ glm::vec3 applyCollision(const glm::vec3& oldFeetPos, const glm::vec3& delta) {
         // Сброс расстояния падения при приземлении
         fallDistance = 0.0f;
         
-        // Точное размещение на поверхности
+        // Точное размещение на поверхности через двоичный поиск.
+        // Это устраняет заметное "пиление" камеры по Y при приземлении.
         newFeetPos.y = oldFeetPos.y;
         const float direction = (delta.y > 0.0f) ? 1.0f : -1.0f;
-        for (float t = COLLISION_STEP; t <= std::abs(delta.y); t += COLLISION_STEP) {
-            newFeetPos.y = oldFeetPos.y + direction * t;
-            if (checkPlayerCollision(newFeetPos)) {
-                newFeetPos.y -= direction * COLLISION_STEP;
-                break;
-            }
+        float lo = 0.0f;
+        float hi = std::abs(delta.y);
+        for (int i = 0; i < 16; ++i) {
+            const float mid = (lo + hi) * 0.5f;
+            newFeetPos.y = oldFeetPos.y + direction * mid;
+            if (checkPlayerCollision(newFeetPos)) hi = mid;
+            else lo = mid;
         }
+        constexpr float CONTACT_EPSILON = 0.0005f;
+        newFeetPos.y = oldFeetPos.y +
+            direction * std::max(0.0f, lo - CONTACT_EPSILON);
     }
     actualDelta.y = newFeetPos.y - oldFeetPos.y;
     
